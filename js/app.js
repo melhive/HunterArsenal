@@ -92,9 +92,9 @@ const fmtDate = (k, o) => G.parseKey(k).toLocaleDateString('en-US', o || { month
 const rankPill = (id, tag) => `<${tag || 'span'} class="pill" data-rank="${id}" ${tag === 'button' ? 'data-act="rank-modal" aria-label="Rank details"' : ''}>${id}-Rank</${tag || 'span'}>`;
 
 /* ============================== UI state ============================== */
-let view = 'home', homeTab = 'today', bonusSub = null, profileSub = null, curDay = today();
+let view = 'home', homeTab = 'today', bonusSub = null, profileSub = null, settingsSub = null, curDay = today();
 let habitFilter = 'ALL', skillFilter = 'ALL', achFilter = 'all', achSort = 'default', titleFilter = 'all', titleCat = 'All', titleQuery = '';
-let weekOffset = 0, popId = null, menuSkill = null, menuHabit = null, chFilter = 'all', classTab = null, deferredPrompt = null, swReg = null, appVersion = window.APP_VERSION || '', draft = null, dqTimer = null;
+let weekOffset = 0, popId = null, menuSkill = null, menuHabit = null, chFilter = 'all', classTab = null, deferredPrompt = null, swReg = null, appVersion = window.APP_VERSION || '', draft = null, dqTimer = null, dqNoticeQueued = false;
 
 const save = () => { if (!Store.save(S)) toast('Storage is full or blocked. Export a backup in Settings.'); };
 
@@ -151,17 +151,17 @@ function todayQuestHTML() {
   const dq = S.dailyQuest, st = dq.state, live = st === 'available' || st === 'accepted';
   const when = dq.at ? new Date(dq.at).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : '';
   const rep = !!dq.repeat;
-  const text = live ? 'Complete today’s scheduled protocols to clear the mission.' : st === 'completed' ? (rep ? 'Mission cleared. The next one arrives automatically.' : 'Mission cleared. Set a time for the next one any time.') : st === 'scheduled' ? `Your next Daily Mission arrives ${when}${rep ? ', every day' : ''}.` : st === 'failed' ? (rep ? 'The last mission was missed. The next one arrives automatically.' : 'The last mission was missed. Set a time for the next one.') : 'Set a time and a Daily Mission arrives every day to earn additional Core XP.';
+  const text = live ? 'Complete today’s scheduled habits to clear the mission.' : st === 'completed' ? (rep ? 'Mission cleared. The next one arrives automatically.' : 'Mission cleared. Set a time for the next one any time.') : st === 'scheduled' ? `Your next Daily Mission arrives ${when}${rep ? ', every day' : ''}.` : st === 'failed' ? (rep ? 'The last mission was missed. The next one arrives automatically.' : 'The last mission was missed. Set a time for the next one.') : 'Set a time and a Daily Mission arrives every day to earn additional Core XP.';
   const cta = st === 'available' ? ['VIEW MISSION', 'dq-open'] : st === 'accepted' ? ['VIEW MISSION', 'dq-sheet'] : [rep ? 'EDIT TIME' : 'SET TIME', 'dq-sheet'];
   const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }).toUpperCase();
-  return panel('tq', `<div class="tq-head">${ic('target', 'tq-ico')}<div><h2>TODAY’S MISSION</h2><p>COMPLETE ALL YOUR PROTOCOLS TODAY.</p></div><span class="tq-date">${dateStr}</span></div>
+  return panel('tq', `<div class="tq-head">${ic('target', 'tq-ico')}<div><h2>TODAY’S MISSION</h2><p>COMPLETE ALL YOUR HABITS TODAY.</p></div><span class="tq-date">${dateStr}</span></div>
     <div class="tq-card"><span class="scroll-ico">${ic('scroll')}</span><div class="tq-main"><div class="tq-title"><b>DAILY MISSION</b><span class="tq-chip ${st}">${DQ_LABEL[st]}</span></div><p>${esc(text)}</p></div></div>
     <div class="tq-foot"><div class="tq-reward"><small>REWARD</small><b>+${G.CONST.DAILY_QUEST_BONUS} Core XP</b></div><button class="tq-btn" data-act="${cta[1]}">${cta[0]}${ic('chev')}</button></div>`);
 }
 
 function tabsHTML() {
   const t = (id, icon, label) => `<button role="tab" class="tab" aria-selected="${homeTab === id}" data-act="tab" data-t="${id}">${ic(icon)}<span>${label}</span></button>`;
-  return panel('tabs', t('today', 'sun', 'Today') + t('habits', 'dumbbell', 'Protocols') + t('skills', 'book', 'Skills') + t('bonus', 'trophy', 'Records'), 'role="tablist" aria-label="Home sections"');
+  return panel('tabs', t('today', 'sun', 'Today') + t('habits', 'dumbbell', 'Habits') + t('skills', 'book', 'Skills') + t('bonus', 'trophy', 'Records'), 'role="tablist" aria-label="Home sections"');
 }
 
 /* ---------- life clock ---------- */
@@ -233,17 +233,17 @@ function skillMenuHTML(s) {
 
 function todayHabitsHTML() {
   const t = today(), list = G.scheduledHabits(S, t), done = list.filter(h => S.completions[t] && S.completions[t][h.id]).length;
-  const head = `<div class="hc-head">${ic('calendar')}<h2>TODAY’S PROTOCOLS</h2><span class="hc-chips"><span class="mini continuity" aria-label="Continuity ${liveCombo()}">${ic('flame')}${liveCombo()}</span><span class="mini shield" aria-label="Contingencies ${S.streak.freezes}">${ic('shield')}${S.streak.freezes}</span></span><span class="hc-count"><b>${done}</b> / ${list.length} <small>COMPLETED</small></span></div>`;
-  const empty = !S.habits.some(h => !h.archived) ? `<div class="empty"><b>No missions yet</b>Your missions come from your protocols. Add your first protocol to begin.</div>` : (list.length ? '' : '<div class="empty"><b>Rest day</b>No protocols are scheduled for today.</div>');
-  return `<section class="hcard">${panel('', `${head}<div class="hlist">${list.map(todayRow).join('')}${empty}</div>${addRow('habit', S.habits.some(h => !h.archived) ? 'Add protocol' : 'Add your first protocol')}`)}</section>`;
+  const head = `<div class="hc-head">${ic('calendar')}<h2>TODAY’S HABITS</h2><span class="hc-chips"><span class="mini continuity" aria-label="Streak ${liveCombo()}">${ic('flame')}${liveCombo()}</span><span class="mini shield" aria-label="Streak Freezes ${S.streak.freezes}">${ic('shield')}${S.streak.freezes}</span></span><span class="hc-count"><b>${done}</b> / ${list.length} <small>COMPLETED</small></span></div>`;
+  const empty = !S.habits.some(h => !h.archived) ? `<div class="empty"><b>No missions yet</b>Your missions come from your habits. Add Your First Habit to begin.</div>` : (list.length ? '' : '<div class="empty"><b>Rest day</b>No habits are scheduled for today.</div>');
+  return `<section class="hcard">${panel('', `${head}<div class="hlist">${list.map(todayRow).join('')}${empty}</div>${addRow('habit', S.habits.some(h => !h.archived) ? 'Add Habit' : 'Add Your First Habit')}`)}</section>`;
 }
 function tabBody() {
   if (homeTab === 'today') return todayHabitsHTML();
   if (homeTab === 'habits') {
     const all = G.activeHabits(S), list = all.filter(h => habitFilter === 'ALL' || h.attr === habitFilter);
-    return `<section class="arsenal">${panel('', `<div class="ttl"><div><h2>Protocol Registry</h2><p>Build, manage and customize your protocols. ${all.length} / ${G.CONST.MAX_ACTIVE_HABITS} active.</p></div></div>${panel('addbtn', `${ic('plus')}Add Protocol`, 'data-act="add" data-kind="habit"', 'button')}`)}</section>
-      ${filtersHTML(habitFilter, 'filter-habit', all.length, 'All Protocols')}
-      <div class="list" data-list="habit">${list.map(habitRow).join('') || `<div class="empty"><b>${all.length ? 'No protocols here' : 'No protocols yet'}</b>${all.length ? 'No protocol uses this attribute yet.' : 'Tap Add Protocol to create your first routine.'}</div>`}</div>`;
+    return `<section class="arsenal">${panel('', `<div class="ttl"><div><h2>Habit Registry</h2><p>Build, manage and customize your habits. ${all.length} / ${G.CONST.MAX_ACTIVE_HABITS} active.</p></div></div>${panel('addbtn', `${ic('plus')}Add Habit`, 'data-act="add" data-kind="habit"', 'button')}`)}</section>
+      ${filtersHTML(habitFilter, 'filter-habit', all.length, 'All Habits')}
+      <div class="list" data-list="habit">${list.map(habitRow).join('') || `<div class="empty"><b>${all.length ? 'No habits here' : 'No habits yet'}</b>${all.length ? 'No habit uses this attribute yet.' : 'Tap Add Habit to create your first routine.'}</div>`}</div>`;
   }
   if (homeTab === 'skills') {
     const list = S.skills.filter(s => skillFilter === 'ALL' || s.attr === skillFilter);
@@ -255,7 +255,7 @@ function tabBody() {
 }
 
 /* ---------- bonus hub ---------- */
-const hcChip = () => `<button class="hc" data-act="hc-info" aria-label="Research Credits ${G.hcBalance(S).balance}"><i>RC</i><div><small>Research Credits</small><b>${fmt(G.hcBalance(S).balance)}</b></div></button>`;
+const hcChip = () => `<button class="hc" data-act="hc-info" aria-label="Hunter Credits ${G.hcBalance(S).balance}"><i>HC</i><div><small>Hunter Credits</small><b>${fmt(G.hcBalance(S).balance)}</b></div></button>`;
 const subHead = (icon, title, sub, right) => `<section class="subhead">${panel('', `<button class="backbtn" data-act="bonus-back" aria-label="Back to Records">${ic('chevL')}</button><div class="ttl"><h2>${title}</h2><p>${sub}</p></div>${right || ''}`)}</section>`;
 function bonusHTML() {
   if (bonusSub === 'achievements') return achievementsHTML();
@@ -267,11 +267,11 @@ function bonusHTML() {
   const bar = (n, m) => `<div class="bar"><i style="width:${m ? (n / m) * 100 : 0}%"></i></div>`;
   return `<div class="hub">
       ${row('license', 'id', '#3ab0c2', 'Hunter’s License', 'View your official Hunter’s License.', '')}
-      ${row('titles', 'crown', '#c0a263', 'Designations', 'View and assign your designations.', `<strong>${ut}</strong> / ${G.TITLES.length}<br>Unlocked${bar(ut, G.TITLES.length)}`)}
-      ${row('achievements', 'trophy', '#b99a5c', 'Qualifications', 'Complete milestones to earn Research Credits.', `<strong>${ua}</strong> / ${G.ACHIEVEMENTS.length}<br>Unlocked${bar(ua, G.ACHIEVEMENTS.length)}`)}
-      ${row('challenges', 'swords', '#b5575f', 'Operations', 'Complete operations for Research Credits.', `<strong>${uc}</strong> / ${G.CHALLENGES.length}<br>Completed${bar(uc, G.CHALLENGES.length)}`)}
+      ${row('titles', 'crown', '#c0a263', 'titles', 'View and assign your titles.', `<strong>${ut}</strong> / ${G.TITLES.length}<br>Unlocked${bar(ut, G.TITLES.length)}`)}
+      ${row('achievements', 'trophy', '#b99a5c', 'Qualifications', 'Complete milestones to earn Hunter Credits.', `<strong>${ua}</strong> / ${G.ACHIEVEMENTS.length}<br>Unlocked${bar(ua, G.ACHIEVEMENTS.length)}`)}
+      ${row('challenges', 'swords', '#b5575f', 'Operations', 'Complete operations for Hunter Credits.', `<strong>${uc}</strong> / ${G.CHALLENGES.length}<br>Completed${bar(uc, G.CHALLENGES.length)}`)}
       ${row('dailyquest', 'scroll', '#8f84b8', 'Daily Missions', 'Schedule and track your Daily Missions.', `<strong>${S.dailyQuest.completed || 0}</strong><br>Cleared`)}
-      ${row('credits', 'palette', '#b99a5c', 'Research Credits', 'Research Credits and display modes.', `<strong>${fmt(G.hcBalance(S).balance)}</strong> RC`)}
+      ${row('credits', 'palette', '#b99a5c', 'Hunter Credits', 'Hunter Credits and display modes.', `<strong>${fmt(G.hcBalance(S).balance)}</strong> HC`)}
     </div>`;
 }
 function progressCell(def, ctx, unlockedAt) {
@@ -290,7 +290,7 @@ function achievementsHTML() {
       <label class="sr" for="ach-sort">Sort</label><select id="ach-sort" class="select" data-change="ach-sort"><option value="default" ${achSort === 'default' ? 'selected' : ''}>Default</option><option value="newest" ${achSort === 'newest' ? 'selected' : ''}>Newest</option><option value="reward" ${achSort === 'reward' ? 'selected' : ''}>Reward</option></select></div>
     <div class="list">${list.map(({ a, at }) => {
       const hid = a.hidden && !at;
-      return panel(`arow tone ${at ? '' : 'locked'} ${hid ? 'hidden-a' : ''}`, `<div class="bdg">${hid ? '?' : ic(a.icon)}</div><div><b>${hid ? 'Hidden Qualification' : a.name}</b><span class="d">${hid ? 'Keep going to discover this qualification.' : a.desc}</span></div>${hid ? '<div class="prog">???</div>' : progressCell(a, ctx, at)}<div class="reward ${at ? 'got' : ''}">${at ? ic('check') : ic('lock')}${hid ? '??? RC' : `+${a.reward} RC`}</div>`, '', 'div', `--tone:${a.tone}`);
+      return panel(`arow tone ${at ? '' : 'locked'} ${hid ? 'hidden-a' : ''}`, `<div class="bdg">${hid ? '?' : ic(a.icon)}</div><div><b>${hid ? 'Hidden Qualification' : a.name}</b><span class="d">${hid ? 'Keep going to discover this qualification.' : a.desc}</span></div>${hid ? '<div class="prog">???</div>' : progressCell(a, ctx, at)}<div class="reward ${at ? 'got' : ''}">${at ? ic('check') : ic('lock')}${hid ? '??? HC' : `+${a.reward} HC`}</div>`, '', 'div', `--tone:${a.tone}`);
     }).join('') || '<div class="empty"><b>Nothing here</b>No qualifications match this filter.</div>'}</div>`;
 }
 function challengesHTML() {
@@ -299,7 +299,7 @@ function challengesHTML() {
   if (chFilter === 'active') list = list.filter(x => !x.at); else if (chFilter === 'completed') list = list.filter(x => x.at);
   const f = (id, label) => `<button class="fchip" aria-pressed="${chFilter === id}" data-act="chal-filter" data-v="${id}">${label}</button>`;
   return subHead('swords', 'Operations', 'Simple goals with real rewards.', hcChip()) + `<div class="filters">${f('all', 'All')}${f('active', 'Active')}${f('completed', 'Completed')}</div>
-    <div class="list">${list.map(({ c, at }) => panel(`arow tone ${at ? '' : 'locked'}`, `<div class="bdg">${ic(c.icon)}</div><div><b>${c.name}</b><span class="d">${c.desc}</span></div>${progressCell(c, ctx, at).replace('Unlocked', 'Completed')}<div class="reward ${at ? 'got' : ''}">${at ? ic('check') : ic('lock')}+${c.reward} RC</div>`, '', 'div', `--tone:${c.tone}`)).join('') || '<div class="empty"><b>Nothing here</b>No challenges match this filter.</div>'}</div>`;
+    <div class="list">${list.map(({ c, at }) => panel(`arow tone ${at ? '' : 'locked'}`, `<div class="bdg">${ic(c.icon)}</div><div><b>${c.name}</b><span class="d">${c.desc}</span></div>${progressCell(c, ctx, at).replace('Unlocked', 'Completed')}<div class="reward ${at ? 'got' : ''}">${at ? ic('check') : ic('lock')}+${c.reward} HC</div>`, '', 'div', `--tone:${c.tone}`)).join('') || '<div class="empty"><b>Nothing here</b>No challenges match this filter.</div>'}</div>`;
 }
 function titlesHTML() {
   const ctx = G.context(S, today()), eq = currentTitle();
@@ -308,9 +308,9 @@ function titlesHTML() {
   if (titleFilter === 'unlocked') list = list.filter(x => x.at); else if (titleFilter === 'locked') list = list.filter(x => !x.at); else if (titleFilter === 'equipped') list = list.filter(x => eq && x.t.id === eq.id);
   const q = titleQuery.trim().toLowerCase(); if (q) list = list.filter(x => (x.t.name + ' ' + x.t.desc + ' ' + x.t.cat).toLowerCase().includes(q));
   const f = (id, label) => `<button class="fchip" aria-pressed="${titleFilter === id}" data-act="title-filter" data-v="${id}">${label}</button>`;
-  return subHead('crown', 'Designations', 'Assign a designation to your hunter profile.') +
-    `<section class="tcard-main">${panel('', `<div class="bdg">${ic(eq ? eq.icon : 'lock')}</div><div><small>Assigned designation</small><h3>${eq ? esc(eq.name) : 'None'}</h3><p>${eq ? esc(eq.desc) : 'Unlock a designation, then assign it here.'}<br>${Object.keys(S.unlocked.titles).length} / ${G.TITLES.length} unlocked</p></div>`, '', 'div')}</section>
-    <div class="toolbar"><label class="sr" for="t-search">Search designations</label><input id="t-search" class="search" type="search" placeholder="Search designations…" value="${esc(titleQuery)}" data-input="title-search" autocomplete="off">
+  return subHead('crown', 'Titles', 'Assign a title to your hunter profile.') +
+    `<section class="tcard-main">${panel('', `<div class="bdg">${ic(eq ? eq.icon : 'lock')}</div><div><small>Assigned title</small><h3>${eq ? esc(eq.name) : 'None'}</h3><p>${eq ? esc(eq.desc) : 'Unlock a title, then assign it here.'}<br>${Object.keys(S.unlocked.titles).length} / ${G.TITLES.length} unlocked</p></div>`, '', 'div')}</section>
+    <div class="toolbar"><label class="sr" for="t-search">Search titles</label><input id="t-search" class="search" type="search" placeholder="Search titles…" value="${esc(titleQuery)}" data-input="title-search" autocomplete="off">
       <label class="sr" for="t-cat">Category</label><select id="t-cat" class="select" data-change="title-cat"><option>All</option>${G.TITLE_CATS.map(c => `<option ${titleCat === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
     <div class="filters">${f('all', 'All')}${f('unlocked', 'Unlocked')}${f('locked', 'Locked')}${f('equipped', 'Assigned')}</div>
     <div class="list" id="title-list">${titleRows(list, ctx, eq)}</div>`;
@@ -321,24 +321,32 @@ function titleRows(list, ctx, eq) {
     return panel(`arow tone ${at ? '' : 'locked'}`, `<div class="bdg">${ic(at ? t.icon : 'lock')}</div><div><b>${esc(t.name)}</b><span class="d">${esc(t.cat)} · ${esc(t.desc)}</span></div>
       ${at ? `<div class="prog done">${ic('check')} Unlocked</div>` : `<div class="prog">${fmt(p)} / ${fmt(t.target)}<div class="bar"><i style="width:${(p / t.target) * 100}%"></i></div></div>`}
       <div class="trow-state ${isEq ? 'eq' : at ? 'un' : 'lk'}">${isEq ? 'Assigned' : at ? 'Assign' : 'Locked'}</div>`, `data-act="title-open" data-id="${t.id}" aria-label="${esc(t.name)}, ${isEq ? 'equipped' : at ? 'unlocked' : 'locked'}"`, 'button', `--tone:${at ? '#b99a5c' : '#4a5560'}`);
-  }).join('') || '<div class="empty"><b>No designations found</b>Try a different filter or search.</div>';
+  }).join('') || '<div class="empty"><b>No titles found</b>Try a different filter or search.</div>';
 }
 function themesHTML() {
   const ctx = G.context(S, today()), hc = G.hcBalance(S);
-  const info = panel('arsenal-info', `<div class="kv"><div><span>Balance</span><b style="color:var(--gold)">${fmt(hc.balance)} RC</b></div><div><span>Earned</span><b>${fmt(hc.earned)} RC</b></div><div><span>Spent</span><b>${fmt(hc.spent)} RC</b></div></div><p class="note" style="text-align:left;padding:.5rem 0 0">RC is cosmetic only. Earn it from qualifications and operations, spend it on display modes. It never buys XP, levels or attributes.</p>`, 'style="margin:.5rem .5rem 0"');
-  return subHead('palette', 'Research Credits', 'Research Credits and display modes.', hcChip()) + info +
-    `<div class="list">${G.THEMES.map(th => { const st = G.themeStatus(S, th, ctx), eq = S.settings.theme === th.id; let btn;
+  const info = panel('arsenal-info', `<div class="kv"><div><span>Balance</span><b style="color:var(--gold)">${fmt(hc.balance)} HC</b></div><div><span>Earned</span><b>${fmt(hc.earned)} HC</b></div><div><span>Spent</span><b>${fmt(hc.spent)} HC</b></div></div><p class="note" style="text-align:left;padding:.5rem 0 0">Hunter Credits are cosmetic only. They never buy XP, levels or attributes.</p>`, 'style="margin:.5rem .5rem 0"');
+  const tabs = ['Display Modes','Photo Borders','Name Plates'];
+  const current = S.settings.shopTab || 'Display Modes';
+  let items;
+  if (current === 'Display Modes') items = G.THEMES.map(th => { const st = G.themeStatus(S, th, ctx), eq = S.settings.theme === th.id; let btn;
       if (eq) btn = `<div class="themebtn eq" aria-label="Equipped">${ic('check')}Assigned</div>`;
       else if (st.owned) btn = `<div class="themebtn">Assign</div>`;
-      else if (st.buy) btn = `<div class="themebtn">${ic('lock')}<small>${st.cost} RC</small></div>`;
+      else if (st.buy) btn = `<div class="themebtn">${ic('lock')}<small>${st.cost} HC</small></div>`;
       else btn = `<div class="themebtn lk">${ic('lock')} ${esc(st.label || 'Locked')}</div>`;
-      return panel('themerow plain', `<div class="swatch" style="--t1:${th.accent};--t2:${th.edge}"></div><div><b>${th.name}</b><span class="d">${th.desc}</span></div>${btn}`, `data-act="theme-open" data-id="${th.id}" aria-label="${th.name} theme"`, 'button'); }).join('')}</div>`;
+      return panel('themerow plain', `<div class="swatch" style="--t1:${th.accent};--t2:${th.edge}"></div><div><b>${th.name}</b><span class="d">${th.desc}</span></div>${btn}`, `data-act="theme-open" data-id="${th.id}" aria-label="${th.name} theme"`, 'button'); }).join('');
+  else items = G.COSMETICS.filter(x => current === 'Photo Borders' ? x.type === 'border' : x.type === 'plate').map(x => {
+    const owned = S.purchases.some(p => p.id === x.id), equipped = (x.type === 'border' ? S.settings.border : S.settings.namePlate) === x.id;
+    return panel('themerow plain', `<div class="cosmetic-swatch" style="--cos:${x.color}">${x.type === 'border' ? 'PHOTO' : 'NAME'}</div><div><b>${esc(x.name)}</b><span class="d">Cosmetic presentation only</span></div><span class="themebtn ${equipped?'eq':''}">${equipped?'Equipped':owned?'Equip':`${x.cost} HC`}</span>`, `data-act="cosmetic-open" data-id="${x.id}"`, 'button');
+  }).join('');
+  return subHead('palette', 'Hunter Credits Shop', 'Cosmetic display items.', hcChip()) + info + `<div class="shop-tabs" role="tablist">${tabs.map(t=>`<button data-act="shop-tab" data-v="${t}" aria-selected="${current===t}">${t}</button>`).join('')}</div><div class="list">${items}</div>`;
 }
 
 const SESSION_ID = Array.from(crypto.getRandomValues(new Uint8Array(2)), b => b.toString(16).padStart(2, '0')).join('').toUpperCase();
-const zulu = () => new Date().toISOString().slice(11, 19) + 'Z';
+const phtClock = () => new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date()) + ' PHT';
+const rulesHomeCard = () => (S.meta.rulesSeen ? '' : `<button class="rules-first" data-act="rules">${ic('info')}<span><b>Hunter's Rules</b><small>Review how Core XP, missions and Streaks work</small></span>${ic('chev')}</button>`);
 function homeHTML() {
-  return `<div class="classbar"><span>RESTRICTED // PERSONAL</span><span>SID <b>${SESSION_ID}</b> · <b id="cb-clock">${zulu()}</b></span></div>` + sysHeader() + levelCardHTML() + attrChipsHTML() + todayQuestHTML() + tabsHTML() + `<div class="tabbody">${tabBody()}</div>` + lifeCardHTML() + '<div style="height:.8rem"></div>';
+  return `<div class="classbar"><span>HUNTER ID <b>${esc(S.profile.hunterId)}</b></span><span><b id="cb-clock">${phtClock()}</b></span></div>` + sysHeader() + `<button class="help-shortcut" data-act="rules" aria-label="Hunter's Rules">?</button>` + rulesHomeCard() + levelCardHTML() + attrChipsHTML() + todayQuestHTML() + tabsHTML() + `<div class="tabbody">${tabBody()}</div>` + lifeCardHTML() + '<div style="height:.8rem"></div>';
 }
 
 /* ---------- history ---------- */
@@ -357,11 +365,11 @@ function historyHTML() {
   for (let i = 0; i < 26 * 7; i++) {
     const d = G.addDays(start, i), r = S.days[d], n = S.completions[d] ? Object.keys(S.completions[d]).length : 0;
     let l = 0; if (n) l = r && r.perfect ? 3 : (r && r.sched && n / r.sched >= .5) ? 2 : 1; if (d > t) l = 0;
-    cells.push(`<i data-l="${l}" designation="${d}: ${n} done"></i>`);
+    cells.push(`<i data-l="${l}" title="${d}: ${n} done"></i>`);
   }
   return `<div class="page"><div class="pagebg"></div><h1>History</h1><p class="sub">Review previous days and weeks</p>
     <div class="hist-nav"><button data-act="week" data-v="-1" aria-label="Previous week">← Prev</button><b>${label} (${fmtDate(days[0])} – ${fmtDate(days[6])})</b><button data-act="week" data-v="1" ${weekOffset >= 0 ? 'disabled' : ''} aria-label="Next week">Next →</button></div>
-    ${panel('card', habits.length ? `<div class="wk">${header}${rows}</div>` : '<div class="empty"><b>No protocols yet</b>Your weekly grid appears here once you add protocols.</div>')}
+    ${panel('card', habits.length ? `<div class="wk">${header}${rows}</div>` : '<div class="empty"><b>No habits yet</b>Your weekly grid appears here once you add habits.</div>')}
     ${panel('card', `<h3>Yearly Overview</h3><div class="heat" role="img" aria-label="Activity over the last 26 weeks">${cells.join('')}</div><div class="legend">Less <i style="background:#22282f"></i><i style="background:#323c48"></i><i style="background:#495869"></i><i style="background:var(--accent)"></i> More</div>`)}</div>`;
 }
 
@@ -374,10 +382,18 @@ function statsHTML() {
   const labels = [0, 6, 12, 18, 24, 29].map(i => `<text x="${10 + i * bw}" y="88">${fmtDate(last[i], { month: 'numeric', day: 'numeric' })}</text>`).join('');
   const stat = (v, l) => panel('', `<div class="stat"><b>${v}</b><span>${l}</span></div>`);
   const habits = S.habits.filter(h => !h.archived);
+  const cx=150,cy=132,radius=92,scale=Math.max(G.CONST.ATTR_TIER_STARTS[4],Math.ceil(Math.max(...G.ATTR_ORDER.map(a=>c.attrXp[a]))/G.CONST.ATTR_TIER_STARTS[4])*G.CONST.ATTR_TIER_STARTS[4]), angles=G.ATTR_ORDER.map((_,i)=>-Math.PI/2+i*2*Math.PI/5);
+  const radarPoints=G.ATTR_ORDER.map((a,i)=>{const v=Math.max(0,Math.min(1,c.attrXp[a]/scale));return `${(cx+Math.cos(angles[i])*radius*v).toFixed(1)},${(cy+Math.sin(angles[i])*radius*v).toFixed(1)}`;}).join(' ');
+  const radarGrid=[.25,.5,.75,1].map(k=>`<polygon points="${angles.map(a=>`${(cx+Math.cos(a)*radius*k).toFixed(1)},${(cy+Math.sin(a)*radius*k).toFixed(1)}`).join(' ')}"/>`).join('');
+  const radarAxes=angles.map(a=>`<line x1="${cx}" y1="${cy}" x2="${cx+Math.cos(a)*radius}" y2="${cy+Math.sin(a)*radius}"/>`).join('');
+  const radarLabels=G.ATTR_ORDER.map((a,i)=>{const lx=cx+Math.cos(angles[i])*(radius+22),ly=cy+Math.sin(angles[i])*(radius+22);return `<text x="${lx}" y="${ly}" fill="${ac(a)}" text-anchor="middle">${a} ${fmt(c.attrXp[a])} XP</text>`;}).join('');
+  const radarMarks=G.ATTR_ORDER.map((a,i)=>{const v=Math.max(0,Math.min(1,c.attrXp[a]/scale));return `<circle cx="${cx+Math.cos(angles[i])*radius*v}" cy="${cy+Math.sin(angles[i])*radius*v}" r="4" fill="${ac(a)}"/>`;}).join('');
+  const radarSVG=`<svg class="radar" viewBox="0 0 300 264" role="img" aria-label="Attribute XP radar"><g class="radar-grid">${radarGrid}${radarAxes}</g><polygon class="radar-value" points="${radarPoints}"/>${radarMarks}${radarLabels}</svg>`;
   return `<div class="page"><div class="pagebg"></div><h1>Statistics</h1><p class="sub">Your performance over time</p>
-    <div class="grid2">${stat(fmt(c.completions), 'Total check-ins')}${stat(fmt(c.xp), 'XP earned')}${stat(c.bestCombo, 'Best active continuity')}${stat(c.activeDays, 'Active days')}</div>
+    <div class="grid2">${stat(fmt(c.completions), 'Total check-ins')}${stat(fmt(c.xp), 'XP earned')}${stat(c.bestCombo, 'Best active Streak')}${stat(c.activeDays, 'Active days')}</div>
+    ${panel('card versatility-card',`<h3>Versatility</h3>${radarSVG}<small>Scale: 0–${fmt(scale)} XP</small>`)}
     ${panel('card', `<h3>Last 30 days — daily completion</h3><svg class="chart" viewBox="0 0 290 94" role="img" aria-label="Daily completion over the last 30 days"><line x1="10" y1="10" x2="280" y2="10" stroke="#303843"/><line x1="10" y1="40" x2="280" y2="40" stroke="#303843"/><line x1="10" y1="70" x2="280" y2="70" stroke="#3b4755"/>${bars}${labels}</svg>`)}
-    ${panel('card', `<h3>Protocol mastery</h3>${habits.map(h => { const m = G.masteryTier(mx[h.id] || 0); return `<div class="mrow"><div class="qicon" style="--qc:${colorOf(h.icon)}">${ic(h.icon)}</div><b>${esc(h.name)}</b><span class="recruit-t" style="font:700 .7rem var(--font-ui);color:var(--accent);letter-spacing:.06em">${m.name}</span><div class="bar"><i style="width:${m.pct}%"></i></div></div>`; }).join('') || '<div class="empty"><b>No protocols yet</b>Mastery appears once you add a protocol.</div>'}`)}</div>`;
+    ${panel('card', `<h3>Habit Mastery</h3>${habits.map(h => { const m = G.masteryTier(mx[h.id] || 0); return `<div class="mrow"><div class="qicon" style="--qc:${colorOf(h.icon)}">${ic(h.icon)}</div><b>${esc(h.name)}</b><span class="recruit-t" style="font:700 .7rem var(--font-ui);color:var(--accent);letter-spacing:.06em">${m.name}</span><div class="bar"><i style="width:${m.pct}%"></i></div></div>`; }).join('') || '<div class="empty"><b>No habits yet</b>Mastery appears once you add a habit.</div>'}`)}</div>`;
 }
 
 /* ---------- profile ---------- */
@@ -389,12 +405,12 @@ function profileHTML() {
       <div class="l1"><b>${G.ATTRS[a].name}</b><span>${tp.max ? `${fmt(x)} XP · MAX` : `${fmt(x)} / ${fmt(tp.next)} XP`}</span></div>
       <div class="bar" role="progressbar" aria-label="${G.ATTRS[a].name} progress" aria-valuenow="${Math.round(tp.pct)}" aria-valuemin="0" aria-valuemax="100"><i style="width:${tp.pct}%"></i></div>
       <div class="l3"><em>${tp.name}</em><span>${tp.max ? 'Highest tier reached' : `Next: ${tp.nextName}`}</span></div></div>`; }).join('');
-  return `<div class="page"><div class="pagebg"></div><h1>Hunter Profile</h1><p class="sub">Your stats, rank, and designations</p>
-    <section class="profile-head">${panel('', `<button class="big-avatar" data-act="avatar" aria-label="Change photo">${ringSVG}<span class="avatar">${avatarInner()}</span><span class="cam">${ic('camera')}</span></button>
+  return `<div class="page"><div class="pagebg"></div><h1>Hunter Profile</h1><p class="sub">Your stats, rank, and titles</p>
+    <section class="profile-head">${panel('', `<span class="big-avatar" aria-label="Profile photo">${ringSVG}<span class="avatar" style="outline:2px solid ${G.COSMETICS.find(x=>x.id===S.settings.border)?.color||'transparent'}">${avatarInner()}</span></span>
       <div><h2>${esc(S.profile.name)} ${rankPill(rk.id, 'button')}</h2><p class="sub2">Level ${li.level} Hunter</p><p class="hid"><span>HUNTER ID</span><b>${esc(S.profile.hunterId)}</b></p><div class="pills" style="flex-wrap:wrap;gap:.35rem"><button class="pill cls" data-act="class-modal">${esc(cls.name)}</button>${cls.versatile ? '<span class="pill vers">Versatile</span>' : ''}</div>${title ? `<p class="ttl" style="margin:.4rem 0 0">“${esc(title.name)}”</p>` : ''}</div>`)}</section>
     ${panel('license-btn', `<span class="qicon">${ic('id')}</span><span><b>Hunter’s License</b><small>View your official Hunter’s License</small></span>${ic('chev', 'chev')}`, 'data-act="license-open" aria-label="Open Hunter’s License"', 'button')}
     ${panel('card', `<h3>Attributes</h3>${attrs}${cls.versatile ? `<div class="vers-note"><b>VERSATILE</b> Your top attributes (${cls.sorted[0].a} and ${cls.sorted[1].a}) are closely matched, like a Universal hero. This is a label only. It does not change XP or class.</div>` : ''}`)}
-    <div class="linkrows">${[['user', 'Edit Profile', 'Name, photo and Mission Clock', 'nav', 'settings'], ['archive', 'Backup / Sync', 'Export, import and reset', 'nav', 'settings'], ['info', `About HunterArsenal v${esc(appVersion)}`, 'What’s new', 'whatsnew', '']].map(([i, t, sub, act, v]) => panel('linkrow', `${ic(i)}<span><b>${t}</b><small>${sub}</small></span>${ic('chev', 'chev')}`, `data-act="${act}" ${v ? `data-v="${v}"` : ''}`, 'button')).join('')}</div>
+    ${S.settings.namePlate!=='none'?`<span class="profile-nameplate" style="--plate:${G.COSMETICS.find(x=>x.id===S.settings.namePlate)?.color||'var(--accent)'}">${esc(S.profile.name)}</span>`:''}
   </div>`;
 }
 function licenseHTML() {
@@ -406,30 +422,35 @@ function licenseHTML() {
 
 /* ---------- settings ---------- */
 function settingsHTML() {
-  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone, ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  const ctx = G.context(S, today()), themes = G.THEMES.filter(t => G.themeStatus(S, t, ctx).owned);
-  const arch = S.habits.filter(h => h.archived);
   const sec = (label, body, cls) => `<h2 class="setlabel">${label}</h2>${panel('card setcard ' + (cls || ''), body)}`;
-  const item = (icon, title, sub, act, cls) => `<button class="setitem ${cls || ''}" data-act="${act}">${ic(icon)}<span><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${ic('chev', 'chev')}</button>`;
-  const install = standalone ? `<div class="setrow"><div><b>Installed</b><small>Running as an app on this device</small></div><span class="chipstat completed">OK</span></div>`
-    : deferredPrompt ? item('download', 'Install app', 'Add HunterArsenal to your home screen', 'install')
-    : `<div class="setrow"><div><b>Install app</b><small>${ios ? 'Tap Share, then Add to Home Screen' : 'Browser menu, then Install app / Add to Home screen'}</small></div></div>`;
-  return `<div class="page"><div class="pagebg"></div><h1>Settings</h1><p class="sub">Configure your arsenal</p>
-    ${sec('Hunter', `<div class="setrow"><div style="display:flex;align-items:center;gap:.6rem"><div class="avatar" style="position:relative;inset:auto;width:2.6rem;height:2.6rem">${avatarInner()}</div><div><b>Photo</b><small>Stored on this device only</small></div></div><div style="display:flex;gap:.4rem"><button class="btn ghost sm" data-act="avatar">Change</button>${S.profile.avatar ? '<button class="btn ghost sm" style="color:#c58790" data-act="avatar-remove">Remove</button>' : ''}</div></div>
-      <div class="setrow"><div><b><label for="f-name">Name</label></b><small>Shown on your Dashboard and License</small></div><div class="inline"><input id="f-name" class="input" maxlength="24" value="${esc(S.profile.name)}" autocomplete="off"><button class="btn sm" data-act="save-name">Save</button></div></div>
-      <div class="setrow"><div><b>Hunter ID</b><small>Issued ${esc(S.profile.createdAt ? G.keyOf(new Date(S.profile.createdAt)) : '')}</small></div><span class="idtag">${esc(S.profile.hunterId)}</span></div>`)}
-    ${sec('Daily Mission', dqFormHTML('settings'))}
-    ${sec('Display & Sound', `<div class="setrow"><div><b><label for="f-theme">Display Mode</label></b><small>Unlock more under Records</small></div><select id="f-theme" class="select" data-change="theme">${themes.map(t => `<option value="${t.id}" ${S.settings.theme === t.id ? 'selected' : ''}>${t.name}</option>`).join('')}</select></div>
-      <div class="setrow"><div><b>Sound effects</b><small>Cues for check-ins, level increases and awards</small></div><div class="seg" role="group" aria-label="Sound effects"><button aria-pressed="${!S.settings.sound}" data-act="sound" data-v="0">Off</button><button aria-pressed="${S.settings.sound}" data-act="sound" data-v="1">On</button></div></div>`)}
-    ${sec('Gameplay', `<div class="setrow"><div><b>Missed-protocol deviation</b><small>Lose ${G.CONST.PENALTY_PER_MISS} XP per missed protocol (max ${G.CONST.PENALTY_DAY_CAP}/day). A contingency excuses it.</small></div><div class="seg" role="group" aria-label="Deviations"><button aria-pressed="${!S.settings.penalties}" data-act="penalty" data-v="0">Off</button><button aria-pressed="${S.settings.penalties}" data-act="penalty" data-v="1">On</button></div></div>`)}
-    ${sec('Mission Clock', `<div class="setrow"><div><b><label for="f-bd">Birthdate</label></b><small>Used only for your Mission Clock</small></div><input id="f-bd" type="date" class="input" value="${esc(S.profile.birthdate)}"></div>
-      <div class="setrow"><div><b><label for="f-ls">Estimated lifespan</label></b><small>In years, a rough personal estimate</small></div><input id="f-ls" type="number" min="30" max="120" class="input num" value="${S.profile.lifespan}"></div>
-      <div class="setbtns"><button class="btn" data-act="save-life">Save</button></div>`)}
-    ${sec('Security', `<div class="setrow"><div><b>App Lock</b><small>${esc(HA.Security.status())}</small></div><button class="btn ghost sm" data-act="sec-manage">Manage</button></div>`)}
-    ${arch.length ? sec('Archived protocols', arch.map(h => `<div class="setrow"><div style="display:flex;align-items:center;gap:.5rem"><div class="qicon" style="--qc:${colorOf(h.icon)};width:1.8rem;height:1.8rem;font-size:1.1rem">${ic(h.icon)}</div><div><b>${esc(h.name)}</b><small>Mastery is kept when you restore</small></div></div><button class="btn ghost sm" data-act="restore" data-id="${h.id}">${ic('restore')}Restore</button></div>`).join('')) : ''}
-    ${sec('Data', `${item('lock', 'Export encrypted backup', 'AES-256, protected by your passphrase', 'export')}${item('download', 'Export plain backup', 'Readable file, keep it safe', 'export-plain')}${item('restore', 'Import backup', 'Encrypted or plain', 'import')}${item('trash', 'Reset all data', 'Erases everything on this device', 'reset', 'danger')}`, 'flush')}
-    ${sec('App', `${install}${item('restore', 'Check for updates', '', 'update')}${item('info', 'What’s new', `Version ${esc(appVersion)}`, 'whatsnew')}`, 'flush')}
-    <p class="ver">HunterArsenal v${esc(appVersion)}</p></div>`;
+  const item = (icon, title, sub, act, val) => `<button class="setitem" data-act="${act}" ${val ? `data-v="${val}"` : ''}>${ic(icon)}<span><b>${title}</b>${sub ? `<small>${sub}</small>` : ''}</span>${ic('chev', 'chev')}</button>`;
+  const back = `<button class="backbtn" data-act="settings-back" aria-label="Back to Settings">${ic('chevL')}</button>`;
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone, ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const install = standalone ? '<div class="setrow"><div><b>Installed</b><small>Running as an app on this device</small></div><span class="chipstat completed">Installed</span></div>' : deferredPrompt ? item('download','Install App','Add HunterArsenal to your home screen','install') : `<div class="setrow"><div><b>Install App</b><small>${ios ? 'Tap Share, then Add to Home Screen' : 'Open the browser menu and choose Install app or Add to Home screen'}</small></div></div>`;
+  const rows = [['user','Account','Profile, photo and personal information'],['scroll','Daily Mission','Schedule and mission timing'],['palette','Appearance','Display mode and sound'],['flame','Gameplay','Penalties and Streak Freeze'],['lock','Security','App Lock and encrypted backups'],['archive','Data & Sync','Backups, restore and sync status'],['info','About',`Version ${esc(appVersion)} and release notes`]];
+  if (!settingsSub) return `<div class="page"><div class="pagebg"></div><div class="settings-page-head"><div><h1>Settings</h1><p class="sub">Configure your arsenal</p></div><button class="help-shortcut" data-act="rules" aria-label="Hunter's Rules">?</button></div><div class="linkrows">${rows.map(([i,t,d])=>item(i,t,d,'settings-open',t)).join('')}</div></div>`;
+  const head = `<div class="settings-page-head">${back}<div><h1>${esc(settingsSub)}</h1><p class="sub">Settings · ${esc(settingsSub)}</p></div><button class="help-shortcut" data-act="rules" aria-label="Hunter's Rules">?</button></div>`;
+  let body = '';
+  if (settingsSub === 'Account') {
+    const arch = S.habits.filter(h=>h.archived);
+    body = `${sec('Profile', `<div class="setrow"><div><b>Profile photo</b><small>Stored on this device</small></div><div class="inline"><button class="btn ghost sm" data-act="avatar">Change</button>${S.profile.avatar?'<button class="btn ghost sm" data-act="avatar-remove">Remove</button>':''}</div></div><div class="setrow"><div><b><label for="f-name">Name</label></b><small>Shown on your profile and license</small></div><div class="inline"><input id="f-name" class="input" maxlength="24" value="${esc(S.profile.name)}"><button class="btn sm" data-act="save-name">Save</button></div></div><div class="setrow"><div><b>Hunter ID</b></div><span class="idtag">${esc(S.profile.hunterId)}</span></div>`)}
+      ${sec('Mission Clock', `<div class="setrow"><div><b><label for="f-bd">Birthdate</label></b><small>Used only for your Mission Clock</small></div><input id="f-bd" type="date" class="input" value="${esc(S.profile.birthdate)}"></div><div class="setrow"><div><b><label for="f-ls">Estimated lifespan</label></b></div><input id="f-ls" type="number" min="30" max="120" class="input num" value="${S.profile.lifespan}"></div><button class="btn" data-act="save-life">Save</button>`)}
+      ${arch.length?sec('Archived Habits',arch.map(h=>`<div class="setrow"><b>${esc(h.name)}</b><button class="btn ghost sm" data-act="restore" data-id="${h.id}">Restore</button></div>`).join('')):''}`;
+  } else if (settingsSub === 'Daily Mission') {
+    body = `${sec('Mission Schedule',dqFormHTML('settings'))}${sec('Mission Rules',`<div class="setrow"><div><b>Reward</b><small>Completed mission</small></div><b>+${G.CONST.DAILY_QUEST_BONUS} Core XP</b></div><div class="setrow"><div><b>Risk</b><small>Accepted, then failed</small></div><b>−${G.CONST.DAILY_QUEST_FAIL_PENALTY} Core XP</b></div><div class="setrow"><div><b>Declined or ignored</b></div><b>−${G.CONST.DAILY_QUEST_DECLINE_PENALTY} Core XP</b></div>`)}`;
+  } else if (settingsSub === 'Appearance') {
+    const ctx=G.context(S,today()),owned=G.THEMES.filter(t=>G.themeStatus(S,t,ctx).owned);
+    body = `${sec('Display Mode',`<div class="setrow"><label for="f-theme">Equipped mode</label><select id="f-theme" class="select" data-change="theme">${owned.map(t=>`<option value="${t.id}" ${S.settings.theme===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}</select></div><button class="btn ghost" data-act="shop-open">Hunter Credits Shop</button>`)}${sec('Sound',`<div class="setrow"><div><b>Sound effects</b><small>System cues and completion feedback</small></div><div class="seg"><button aria-pressed="${!S.settings.sound}" data-act="sound" data-v="0">Off</button><button aria-pressed="${S.settings.sound}" data-act="sound" data-v="1">On</button></div></div>`)}`;
+  } else if (settingsSub === 'Gameplay') {
+    body = `${sec('Penalties',`<div class="setrow"><div><b>Penalties</b><small>Missed Habit: −${G.CONST.PENALTY_PER_MISS} Core XP each, no daily cap</small></div><div class="seg"><button aria-pressed="${!S.settings.penalties}" data-act="penalty" data-v="0">Off</button><button aria-pressed="${S.settings.penalties}" data-act="penalty" data-v="1">On</button></div></div><div class="setrow"><div><b>Accepted mission then failed</b><small>Daily Mission</small></div><b>−${G.CONST.DAILY_QUEST_FAIL_PENALTY} Core XP</b></div><div class="setrow"><div><b>Declined or ignored mission</b></div><b>−${G.CONST.DAILY_QUEST_DECLINE_PENALTY} Core XP</b></div>`)}${sec('Streak Freeze',`<div class="setrow"><div><b>Automatic Streak Freeze</b><small>Use one when an incomplete day would break your Streak</small></div><div class="seg"><button aria-pressed="${S.settings.autoFreeze===false}" data-act="auto-freeze" data-v="0">Off</button><button aria-pressed="${S.settings.autoFreeze!==false}" data-act="auto-freeze" data-v="1">On</button></div></div><div class="setrow"><div><b>Freeze bank</b><small>${S.streak.freezes} / ${G.CONST.FREEZE_CAP}</small></div><button class="btn ghost sm" data-act="rest-day">Rest Day</button></div>`)}`;
+  } else if (settingsSub === 'Security') {
+    body = `${sec('Device Lock',`<div class="setrow"><div><b>App Lock</b><small>${esc(HA.Security.status())}</small></div><button class="btn ghost sm" data-act="sec-manage">Manage</button></div>`)}${sec('Encrypted Backup',item('lock','Export encrypted backup','AES-256 protected by your passphrase','export'))}`;
+  } else if (settingsSub === 'Data & Sync') {
+    body = `${sec('Backup',`${item('lock','Export encrypted backup','AES-256, protected by your passphrase','export')}${item('download','Export plain backup','Readable local backup file','export-plain')}${item('restore','Import / restore backup','Encrypted or plain','import')}${item('trash','Reset all data','Erases this device data','reset')}`,'flush')}${sec('Sync',`<div class="setrow"><div><b>Sync</b><small>End-to-end encrypted sync is planned</small></div><span class="chipstat">Coming soon</span></div>`)}${sec('Install App',install)}${sec('Archived Habits',`Habits stay available for restore under Account.`)}`;
+  } else {
+    body = `${sec('HunterArsenal',`<div class="setrow"><b>Version</b><span>v${esc(appVersion)}</span></div>${item('info',"What's New",'View the v2.4.0 changelog','whatsnew')}${item('scroll',"Hunter's Rules",'Nine sections with live progression values','rules')}${install}${item('restore','Check for updates','Refresh the offline app cache','update')}`)}`;
+  }
+  return `<div class="page"><div class="pagebg"></div>${head}${body}</div>`;
 }
 
 function dockHTML() {
@@ -437,13 +458,30 @@ function dockHTML() {
   return panel('nav', n('home', 'home', 'Home') + n('history', 'calendar', 'History') + n('stats', 'bars', 'Stats') + n('profile', 'user', 'Profile') + n('settings', 'gear', 'Settings'), '', 'nav');
 }
 
+function rulesHTML() {
+  const C = G.CONST, max = C.MAX_ACTIVE_HABITS;
+  const sections = [
+    ['Core XP', `A completed Habit gives +${C.HUNTER_XP} Core XP. Daily Mission rewards add +${C.DAILY_QUEST_BONUS}; penalties subtract from Core XP only. Core XP cannot fall below zero when total progress is calculated.`],
+    ['Habit completion', `A completed Habit gives +${C.HUNTER_XP} Core XP, +${C.ATTR_XP} attribute XP, and +${C.MASTERY_XP} mastery XP. Up to ${max} active Habits are allowed. Example: completing ${max} Habits gives +${max*C.HUNTER_XP} Core XP; each Habit adds +${C.ATTR_XP} XP to its chosen attribute and +${C.MASTERY_XP} XP to its own mastery.`],
+    ['Missed-Habit penalties', `Each missed scheduled Habit costs −${C.PENALTY_PER_MISS} Core XP when penalties are on, with no daily cap. Example: ${max} missed Habits cost −${max*C.PENALTY_PER_MISS} Core XP. A Rest Day or used Streak Freeze cancels that day's missed-Habit penalty.`],
+    ['Daily Mission', `Complete the mission for +${C.DAILY_QUEST_BONUS} Core XP only. Accepting then failing costs −${C.DAILY_QUEST_FAIL_PENALTY}; declining or letting it expire costs −${C.DAILY_QUEST_DECLINE_PENALTY}; no mission costs 0. Example: ${max} missed Habits plus an accepted failed mission costs −${max*C.PENALTY_PER_MISS+C.DAILY_QUEST_FAIL_PENALTY} Core XP. A later Rest Day does not cancel mission risk.`],
+    ['Streak', `A day with every scheduled Habit completed advances the Streak. A partial day is incomplete: ${max-1} of ${max} is not a qualifying day. A freeze can preserve the current Streak without increasing its count.`],
+    ['Streak Freeze', `Earn freezes at milestone streaks: ${C.FREEZE_MILESTONES.map(([m,n])=>`${m} days: +${n}`).join(', ')}; each additional ${C.FREEZE_EVERY} days earns +${C.FREEZE_EVERY_REWARD}. The bank holds at most ${C.FREEZE_CAP}.`],
+    ['Rest Day', 'Declare a Rest Day using one available Streak Freeze. It preserves the current Streak count, cancels missed-Habit penalties, and prevents a Daily Mission from arriving that day. The next qualifying day resumes the count.'],
+    ['Habit Mastery', `Each Habit has seven levels: ${G.MASTERY.map((name,i)=>`${name} ${C.MASTERY_STARTS[i]} XP`).join(' · ')}. A check-in adds +${C.MASTERY_XP} mastery XP to that Habit; there are no mastery penalties.`],
+    ['Attributes and progression', `Each Habit check-in adds +${C.ATTR_XP} XP to its selected attribute (${G.ATTR_ORDER.join(', ')}). Attribute XP, mastery XP, Skills, titles, achievements and Hunter Credits are unaffected by penalties. A completed Daily Mission grants Core XP only.`]
+  ];
+  const badge = S.meta.rulesVersion !== '2.4.0' ? '<span class="rules-badge">RULES UPDATED · v2.4.0</span>' : '';
+  return `<div class="page"><div class="pagebg"></div><button class="backbtn" data-act="rules-back">${ic('chevL')} Back</button><h1>Hunter's Rules</h1><p class="sub">Current rules and progression values ${badge}</p>${sections.map(([title,body],i)=>`<details class="rule-section" ${i===0?'open':''}><summary><span>${String(i+1).padStart(2,'0')}</span>${title}</summary><p>${body}</p></details>`).join('')}<button class="btn ghost" data-act="rules-ack">Acknowledge Updated Rules</button></div>`;
+}
+
 let lastKey = '', lastTab = '';
 function render() {
   const sc = $('#scroll'), top = sc ? sc.scrollTop : 0;
-  const screens = { home: homeHTML, history: historyHTML, stats: statsHTML, profile: profileHTML, settings: settingsHTML };
+  const screens = { home: homeHTML, history: historyHTML, stats: statsHTML, profile: profileHTML, settings: settingsHTML, rules: rulesHTML };
   $('#app').innerHTML = `<main class="scroll" id="scroll" aria-live="off">${screens[view]()}</main><div class="dock">${dockHTML()}</div>`;
   const sc2 = $('#scroll'); sc2.scrollTop = top; popId = null;
-  const key = view + '|' + (view === 'profile' ? profileSub : ''), tk = view === 'home' ? homeTab + '|' + bonusSub : '';
+  const key = view + '|' + (view === 'profile' ? profileSub : view === 'settings' ? settingsSub : ''), tk = view === 'home' ? homeTab + '|' + bonusSub : '';
   if (key !== lastKey) sc2.classList.add('enter'); else if (tk !== lastTab) sc2.classList.add('swap');
   lastKey = key; lastTab = tk;
   if (view === 'profile' && profileSub === 'license') drawCard();
@@ -487,26 +525,26 @@ function announce(before, after, ev, fresh) {
   const rk = G.rankForLevel(after.level), cls = G.classInfo(G.attrXP(S));
   if (after.level > before.level) {
     Notice.show({ title: 'LEVEL INCREASE', subtitle: `LEVEL ${after.level}`, sound: 'levelup', bodyHTML: `<div class="nw-rows"><div><span>Rank</span><b>${rk.id}-Rank · ${esc(rk.title)}</b></div><div><span>Class</span><b>${esc(cls.name)}</b></div><div><span>Core XP</span><b>${fmt(G.totalXP(S))}</b></div></div>`, quote: 'Record updated.' });
-    if (after.rankIdx > before.rankIdx) Notice.show({ title: 'PROMOTION', subtitle: `${rk.id}-RANK`, tone: rk.color, sound: 'rankup', bodyHTML: `<div class="nw-rows"><div><span>New rank</span><b>${rk.id}-Rank</b></div><div><span>Designation</span><b>${esc(rk.title)}</b></div></div>`, quote: 'Entry recorded.' });
+    if (after.rankIdx > before.rankIdx) Notice.show({ title: 'PROMOTION', subtitle: `${rk.id}-RANK`, tone: rk.color, sound: 'rankup', bodyHTML: `<div class="nw-rows"><div><span>New rank</span><b>${rk.id}-Rank</b></div><div><span>title</span><b>${esc(rk.title)}</b></div></div>`, quote: 'Entry recorded.' });
   }
   G.ATTR_ORDER.forEach(a => {
     if (after.attrIdx[a] > before.attrIdx[a]) { const t = G.attrTier(a, G.attrXP(S)[a]);
-      Notice.show({ title: 'TIER ADVANCED', subtitle: esc(t.name.toUpperCase()), tone: ac(a), sound: 'rankup', bodyHTML: `<div class="nw-head"><span class="qicon" style="--qc:${ac(a)}">${ic(G.ATTRS[a].icon)}</span><div><b>${a} — ${G.ATTRS[a].name}</b><span>Tier ${G.TIER_ROMAN[t.idx]} · ${esc(t.name)}</span></div></div>`, quote: `${G.ATTRS[a].name} readings updated.` }); }
+      Notice.show({ title: 'ATTRIBUTE TIER UP', subtitle: esc(t.name.toUpperCase()), tone: ac(a), sound: 'rankup', bodyHTML: `<div class="nw-head"><span class="qicon" style="--qc:${ac(a)}">${ic(G.ATTRS[a].icon)}</span><div><b>${a} — ${G.ATTRS[a].name}</b><span>Tier ${G.TIER_ROMAN[t.idx]} · ${esc(t.name)}</span></div></div>`, quote: `${G.ATTRS[a].name} readings updated.` }); }
   });
   Object.keys(after.mastery).forEach(id => { if (before.mastery[id] !== undefined && after.mastery[id] > before.mastery[id]) { const h = S.habits.find(x => x.id === id); if (h) setTimeout(() => toast(`${h.name}: mastery ${G.MASTERY[after.mastery[id]]}`), 600); } });
   if (ev.dqCompleted) Notice.show({ title: 'DAILY MISSION', subtitle: 'CLEARED', sound: 'unlock', bodyHTML: `<div class="nw-rows"><div><span>Reward</span><b>+${G.CONST.DAILY_QUEST_BONUS} Core XP</b></div></div>`, quote: 'Mission complete. Schedule your next one any time.' });
-  else if (ev.becamePerfect) toast(`All protocols cleared! Continuity: ${liveCombo()}`);
+  else if (ev.becamePerfect) toast(`All Habits cleared! Streak: ${liveCombo()}`);
   const ach = fresh.achievements.concat(fresh.challenges);
-  if (ach.length === 1) { const a = ach[0]; Notice.show({ title: fresh.challenges.includes(a) ? 'CHALLENGE COMPLETE' : 'QUALIFICATION AWARDED', subtitle: esc(a.name), tone: a.tone, sound: 'unlock', bodyHTML: `<div class="nw-head"><span class="qicon" style="--qc:${a.tone}">${ic(a.icon)}</span><div><b>${esc(a.name)}</b><span>${esc(a.desc)}</span></div></div><div class="nw-rows"><div><span>Reward</span><b>+${a.reward} RC</b></div></div>` }); }
-  else if (ach.length > 1) Notice.show({ title: 'UNLOCKED', subtitle: `${ach.length} NEW QUALIFICATIONS`, tone: ach[0].tone, sound: 'unlock', bodyHTML: `<ul class="nw-list">${ach.slice(0, 4).map(a => `<li>${ic(a.icon)}${esc(a.name)} <span style="margin-left:auto;color:var(--gold);font-weight:700">+${a.reward} RC</span></li>`).join('')}${ach.length > 4 ? `<li>…and ${ach.length - 4} more</li>` : ''}</ul><div class="nw-rows"><div><span>Total reward</span><b>+${ach.reduce((s, a) => s + a.reward, 0)} RC</b></div></div>`, quote: 'See Records for details.' });
-  if (fresh.titles.length) Notice.show({ title: 'DESIGNATION GRANTED', subtitle: esc(fresh.titles[0].name), tone: '#b99a5c', sound: 'unlock', bodyHTML: `<ul class="nw-list">${fresh.titles.slice(0, 4).map(t => `<li>${ic(t.icon)}${esc(t.name)} <span style="color:#8c97a4">· ${esc(t.cat)}</span></li>`).join('')}${fresh.titles.length > 4 ? `<li>…and ${fresh.titles.length - 4} more</li>` : ''}</ul>`, quote: 'Assign it under Records → Designations.' });
+  if (ach.length === 1) { const a = ach[0]; Notice.show({ title: fresh.challenges.includes(a) ? 'CHALLENGE COMPLETE' : 'QUALIFICATION AWARDED', subtitle: esc(a.name), tone: a.tone, sound: 'unlock', bodyHTML: `<div class="nw-head"><span class="qicon" style="--qc:${a.tone}">${ic(a.icon)}</span><div><b>${esc(a.name)}</b><span>${esc(a.desc)}</span></div></div><div class="nw-rows"><div><span>Reward</span><b>+${a.reward} HC</b></div></div>` }); }
+  else if (ach.length > 1) Notice.show({ title: 'UNLOCKED', subtitle: `${ach.length} NEW QUALIFICATIONS`, tone: ach[0].tone, sound: 'unlock', bodyHTML: `<ul class="nw-list">${ach.slice(0, 4).map(a => `<li>${ic(a.icon)}${esc(a.name)} <span style="margin-left:auto;color:var(--gold);font-weight:700">+${a.reward} HC</span></li>`).join('')}${ach.length > 4 ? `<li>…and ${ach.length - 4} more</li>` : ''}</ul><div class="nw-rows"><div><span>Total reward</span><b>+${ach.reduce((s, a) => s + a.reward, 0)} HC</b></div></div>`, quote: 'See Records for details.' });
+  if (fresh.titles.length) Notice.show({ title: 'title GRANTED', subtitle: esc(fresh.titles[0].name), tone: '#b99a5c', sound: 'unlock', bodyHTML: `<ul class="nw-list">${fresh.titles.slice(0, 4).map(t => `<li>${ic(t.icon)}${esc(t.name)} <span style="color:#8c97a4">· ${esc(t.cat)}</span></li>`).join('')}${fresh.titles.length > 4 ? `<li>…and ${fresh.titles.length - 4} more</li>` : ''}</ul>`, quote: 'Assign it under Records → titles.' });
 }
 
 /* compact, non-blocking "Habit Completed" System reward (full modals are kept for level-ups and unlocks) */
 function rewardToast(h) {
   const old = $('#layer .rtoast'); if (old) old.remove();
   const el = document.createElement('div'); el.className = 'rtoast'; el.setAttribute('role', 'status'); el.style.setProperty('--ac', ac(h.attr));
-  el.innerHTML = `<div class="rt-h">${ic('check')}<b>PROTOCOL COMPLETED</b><span>${esc(h.name)}</span></div><div class="rt-r"><span>+${G.CONST.HUNTER_XP} Core XP</span><span style="color:${ac(h.attr)}">+${G.CONST.ATTR_XP} ${h.attr} XP</span><span style="color:#8b7db3">+${G.CONST.MASTERY_XP} Mastery XP</span></div>`;
+  el.innerHTML = `<div class="rt-h">${ic('check')}<b>habit COMPLETED</b><span>${esc(h.name)}</span></div><div class="rt-r"><span>+${G.CONST.HUNTER_XP} Core XP</span><span style="color:${ac(h.attr)}">+${G.CONST.ATTR_XP} ${h.attr} XP</span><span style="color:#8b7db3">+${G.CONST.MASTERY_XP} Mastery XP</span></div>`;
   $('#layer').appendChild(el); setTimeout(() => el.remove(), 2600);
 }
 
@@ -521,7 +559,7 @@ function toggleHabit(id) {
 function habitPreview() {
   const d = draft, mx = d.id ? (G.masteryXPMap(S)[d.id] || 0) : 0;
   const sched = d.sched === 'custom' && d.days && d.days.length ? d.days.slice().sort().map(x => DOW[x]).join(' ') : 'Every day';
-  return `<div class="qicon big" style="--qc:${colorOf(d.icon)}">${ic(d.icon)}</div><b>${esc(d.name) || 'Protocol name'}</b><span class="d">${esc(d.desc) || 'Short description'}</span>${atag(d.attr, true)}
+  return `<div class="qicon big" style="--qc:${colorOf(d.icon)}">${ic(d.icon)}</div><b>${esc(d.name) || 'habit name'}</b><span class="d">${esc(d.desc) || 'Short description'}</span>${atag(d.attr, true)}
     <ul><li>${ic('star')}<span style="color:#6fae8a;font-weight:700">+${G.CONST.HUNTER_XP} Core XP</span></li><li>${ic('calendar')}${esc(sched)}</li><li>${ic('trophy')}Mastery: ${G.masteryTier(mx).name}</li></ul>`;
 }
 function openHabitForm(id) {
@@ -533,28 +571,28 @@ function openHabitForm(id) {
   renderHabitForm();
 }
 function limitNotice() {
-  Notice.show({ title: 'PROTOCOL LIMIT', subtitle: `${G.CONST.MAX_ACTIVE_HABITS} ACTIVE`, tone: '#b98a50', dismissible: true, bodyHTML: `<p style="margin:0;font-size:.85rem;color:#d5dbe2">You can keep up to ${G.CONST.MAX_ACTIVE_HABITS} active protocols. Archive or delete one to make room. Archived protocols keep their mastery.</p>` });
+  Notice.show({ title: 'habit LIMIT', subtitle: `${G.CONST.MAX_ACTIVE_HABITS} ACTIVE`, tone: '#b98a50', dismissible: true, bodyHTML: `<p style="margin:0;font-size:.85rem;color:#d5dbe2">You can keep up to ${G.CONST.MAX_ACTIVE_HABITS} active habits. Archive or delete one to make room. Archived habits keep their mastery.</p>` });
 }
 function renderHabitForm(keepFocus) {
   const d = draft, A = G.ATTRS[d.attr];
-  openSheet(`${sheetHead('target', d.mode === 'add' ? 'Add New Protocol' : 'Edit Protocol', d.mode === 'add' ? 'Create a new hunter routine' : 'Update your routine', true)}
+  openSheet(`${sheetHead('target', d.mode === 'add' ? 'Add New habit' : 'Edit habit', d.mode === 'add' ? 'Create a new hunter routine' : 'Update your routine', true)}
     <div class="two-col"><div>
-      <div class="field"><label for="h-name">Protocol name <span class="cnt" id="h-ncnt">${d.name.length}/50</span></label><input id="h-name" class="input" maxlength="50" placeholder="e.g. Study Cybersecurity" value="${esc(d.name)}" data-input="h-name" autocomplete="off"></div>
+      <div class="field"><label for="h-name">habit name <span class="cnt" id="h-ncnt">${d.name.length}/50</span></label><input id="h-name" class="input" maxlength="50" placeholder="e.g. Study Cybersecurity" value="${esc(d.name)}" data-input="h-name" autocomplete="off"></div>
       <div class="field"><label for="h-desc">Description (optional) <span class="cnt" id="h-dcnt">${d.desc.length}/100</span></label><textarea id="h-desc" class="input" maxlength="100" placeholder="e.g. THM / Labs / Notes" data-input="h-desc">${esc(d.desc)}</textarea></div></div>
-      ${panel('preview', `<div id="h-preview">${habitPreview()}</div>`, 'aria-label="Protocol preview" aria-live="polite"')}</div>
+      ${panel('preview', `<div id="h-preview">${habitPreview()}</div>`, 'aria-label="habit preview" aria-live="polite"')}</div>
     <div class="field"><span class="lab">Icon</span><div class="icon-pick" role="group" aria-label="Icon">${PICK_HABIT.map(i => `<button aria-pressed="${d.icon === i}" data-act="h-icon" data-v="${i}" aria-label="${i}">${ic(i)}</button>`).join('')}</div></div>
     <div class="field"><span class="lab">Attribute (stat)</span><div class="attr-pick" role="group" aria-label="Attribute">${G.ATTR_ORDER.map(a => `<button style="--ac:${ac(a)}" aria-pressed="${d.attr === a}" data-act="h-attr" data-v="${a}">${ic(G.ATTRS[a].icon)}${a}</button>`).join('')}</div>
       <div class="attr-desc" style="--ac:${ac(d.attr)}">${ic(A.icon)}<div><b>${d.attr} — ${A.name.toUpperCase()}</b><small>${A.blurb}</small></div></div></div>
     <div class="field"><span class="lab">Reward</span><div class="reward-box"><span>${ic('star')}+${G.CONST.HUNTER_XP} Core XP</span><span style="color:${ac(d.attr)}">+${G.CONST.ATTR_XP} ${d.attr} XP</span><span style="color:#8b7db3">+${G.CONST.MASTERY_XP} Mastery XP</span></div></div>
     <div class="field"><label for="h-sched">Schedule</label><select id="h-sched" class="input" data-change="h-sched"><option value="every" ${d.sched === 'every' ? 'selected' : ''}>Every day</option><option value="custom" ${d.sched === 'custom' ? 'selected' : ''}>Specific days</option></select>
       ${d.sched === 'custom' ? `<div class="dowpick" role="group" aria-label="Days">${DOW.map((x, i) => `<button aria-pressed="${!!(d.days && d.days.includes(i))}" data-act="h-day" data-v="${i}" aria-label="${DOWN[i]}">${x}</button>`).join('')}</div>` : ''}</div>
-    <div class="sheet-actions"><button class="btn ghost" data-act="sheet-close">Cancel</button><button class="btn" data-act="h-save">${d.mode === 'add' ? 'Create Protocol' : 'Save'}</button></div>
-    ${d.mode === 'edit' ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.6rem"><button class="btn ghost" data-act="h-archive">${ic('archive')}Archive</button><button class="btn danger" data-act="del-habit" data-id="${d.id}">${ic('trash')}Delete</button></div>` : ''}`, { label: 'Protocol form', nofocus: keepFocus });
+    <div class="sheet-actions"><button class="btn ghost" data-act="sheet-close">Cancel</button><button class="btn" data-act="h-save">${d.mode === 'add' ? 'Create habit' : 'Save'}</button></div>
+    ${d.mode === 'edit' ? `<div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem;margin-top:.6rem"><button class="btn ghost" data-act="h-archive">${ic('archive')}Archive</button><button class="btn danger" data-act="del-habit" data-id="${d.id}">${ic('trash')}Delete</button></div>` : ''}`, { label: 'habit form', nofocus: keepFocus });
 }
 function syncDraftText() { const n = $('#h-name') || $('#s-name'), s = $('#h-desc') || $('#s-desc'); if (n) draft.name = n.value; if (s) draft.desc = s.value; }
 function saveHabit() {
   syncDraftText(); const d = draft, name = d.name.trim();
-  if (!name) { toast('Give your protocol a name'); const n = $('#h-name'); if (n) n.focus(); return; }
+  if (!name) { toast('Give your habit a name'); const n = $('#h-name'); if (n) n.focus(); return; }
   let days = null;
   if (d.sched === 'custom') { days = (d.days || []).slice().sort(); if (!days.length) { toast('Pick at least one day'); return; } if (days.length === 7) days = null; }
   const fields = { name, desc: d.desc.trim(), icon: d.icon, attr: d.attr, days };
@@ -562,11 +600,11 @@ function saveHabit() {
     if (G.activeHabits(S).length >= G.CONST.MAX_ACTIVE_HABITS) { closeSheet(); limitNotice(); return; }
     const h = { id: Store.uid(), created: today(), archived: false, ...fields };
     closeSheet(); mutate(() => { S.habits.push(h); });
-    Notice.show({ title: 'NEW PROTOCOL', subtitle: 'REGISTERED', sound: 'notice', primary: { label: 'OK' },
+    Notice.show({ title: 'NEW habit', subtitle: 'REGISTERED', sound: 'notice', primary: { label: 'OK' },
       bodyHTML: `<div class="nw-head"><span class="qicon" style="--qc:${colorOf(h.icon)}">${ic(h.icon)}</span><div><b>${esc(h.name)}</b><span>${esc(h.desc || G.ATTRS[h.attr].name)}</span></div></div>
-        <div class="nw-stats">${stat(G.ATTRS[h.attr].icon, 'Attribute', `${h.attr} — ${G.ATTRS[h.attr].name.toUpperCase()}`, ac(h.attr))}${stat('star', 'Core XP', `+${G.CONST.HUNTER_XP} XP`, '#6fae8a')}${stat('calendar', 'Schedule', h.days ? h.days.map(x => DOW[x]).join(' ') : 'Every day', '#e6ebf0')}${stat('trophy', 'Mastery', 'AWAKENED', '#8b7db3')}</div>`, quote: 'Protocol logged.' });
+        <div class="nw-stats">${stat(G.ATTRS[h.attr].icon, 'Attribute', `${h.attr} — ${G.ATTRS[h.attr].name.toUpperCase()}`, ac(h.attr))}${stat('star', 'Core XP', `+${G.CONST.HUNTER_XP} XP`, '#6fae8a')}${stat('calendar', 'Schedule', h.days ? h.days.map(x => DOW[x]).join(' ') : 'Every day', '#e6ebf0')}${stat('trophy', 'Mastery', 'AWAKENED', '#8b7db3')}</div>`, quote: 'habit logged.' });
   } else {
-    closeSheet(); mutate(() => { const h = S.habits.find(x => x.id === d.id); if (h) Object.assign(h, fields); }); toast('Protocol saved');
+    closeSheet(); mutate(() => { const h = S.habits.find(x => x.id === d.id); if (h) Object.assign(h, fields); }); toast('habit saved');
   }
 }
 function archiveHabit() {
@@ -574,8 +612,8 @@ function archiveHabit() {
 }
 function confirmDelete(kind, id) {
   const item = (kind === 'habit' ? S.habits : S.skills).find(x => x.id === id); if (!item) return;
-  Notice.show({ title: kind === 'habit' ? 'DELETE PROTOCOL?' : 'DELETE SKILL?', tone: '#b5575f', sound: 'penalty', dismissible: true,
-    bodyHTML: `<div class="nw-head"><span class="qicon" style="--qc:${colorOf(item.icon)}">${ic(item.icon)}</span><div><b>${esc(item.name)}</b><span>${kind === 'habit' ? 'Your XP and history are kept. Protocol mastery for this protocol is removed. Use Archive to keep mastery.' : 'Its practice log will be removed.'}</span></div></div>`,
+  Notice.show({ title: kind === 'habit' ? 'DELETE habit?' : 'DELETE SKILL?', tone: '#b5575f', sound: 'penalty', dismissible: true,
+    bodyHTML: `<div class="nw-head"><span class="qicon" style="--qc:${colorOf(item.icon)}">${ic(item.icon)}</span><div><b>${esc(item.name)}</b><span>${kind === 'habit' ? 'Your XP and history are kept. habit mastery for this habit is removed. Use Archive to keep mastery.' : 'Its practice log will be removed.'}</span></div></div>`,
     secondary: { label: 'CANCEL' }, primary: { label: 'DELETE', onClick: () => { closeSheet(); mutate(() => { if (kind === 'habit') S.habits = S.habits.filter(x => x.id !== id); else { S.skills = S.skills.filter(x => x.id !== id); S.skillLog = S.skillLog.filter(e => e.id !== id); } }); toast('Deleted'); } } });
 }
 
@@ -613,7 +651,7 @@ function rankModal() {
     <div class="bar" style="margin-bottom:.8rem" aria-hidden="true"><i style="width:${li.pct}%"></i></div>
     <div class="ladder" role="list" aria-label="Rank ladder">${G.RANKS.map((r, i) => { const nx = G.RANKS[i + 1], hi = nx ? nx.minLevel - 1 : G.CONST.MAX_LEVEL;
       return `<div class="lrow ${r.id === rk.id ? 'cur' : ''}" role="listitem" style="--rc:${r.color}"><div class="rk">${r.id}</div><div><b>${r.id}-Rank · ${esc(r.title)}</b><small>Level ${r.minLevel}–${hi}${li.level >= r.minLevel ? ' · reached' : ''}</small></div><div class="mult">${fmt(G.rankStartXP(i))} XP</div></div>`; }).join('')}</div>
-    <p class="note" style="margin-top:.6rem">Every protocol gives the same Core XP at every rank. There are no rank multipliers.</p>`, { label: 'Rank details', nofocus: true });
+    <p class="note" style="margin-top:.6rem">Every habit gives the same Core XP at every rank. There are no rank multipliers.</p>`, { label: 'Rank details', nofocus: true });
 }
 function classModal(tab) {
   const ax = G.attrXP(S), cls = G.classInfo(ax), a = tab && G.ATTRS[tab] ? tab : (classTab || cls.attr); classTab = a;
@@ -628,32 +666,32 @@ function classModal(tab) {
 function masteryModal(id) {
   const h = S.habits.find(x => x.id === id); if (!h) return;
   const mx = G.masteryXPMap(S)[id] || 0, t = G.masteryTier(mx), st = G.habitStats(S, h, today());
-  openSheet(`${sheetHead(h.icon, 'Protocol Mastery', esc(h.name))}
-    <div class="chead" style="--ac:#8b7db3">${ic('trophy')}<div><small>${atag(h.attr)} · Continuity ${st.streak}d · ${st.total} check-ins</small><b>${t.name}</b><em>Level ${t.no} · ${t.max ? `${fmt(mx)} XP · MAX` : `${fmt(mx)} / ${fmt(t.next)} XP`}</em></div></div>
+  openSheet(`${sheetHead(h.icon, 'habit Mastery', esc(h.name))}
+    <div class="chead" style="--ac:#8b7db3">${ic('trophy')}<div><small>${atag(h.attr)} · Streak ${st.streak}d · ${st.total} check-ins</small><b>${t.name}</b><em>Level ${t.no} · ${t.max ? `${fmt(mx)} XP · MAX` : `${fmt(mx)} / ${fmt(t.next)} XP`}</em></div></div>
     <div class="bar" style="margin:.5rem 0 .8rem" aria-hidden="true"><i style="width:${t.pct}%"></i></div>
     <div class="tiers" role="list" style="--ac:#8b7db3">${G.MASTERY.map((n, i) => `<div class="trow2 ${i === t.idx ? 'cur' : ''} ${i < t.idx ? 'done' : ''}" role="listitem"><span class="rn">${i + 1}</span><div><b>${n}</b><small>${fmt(G.CONST.MASTERY_STARTS[i])} Mastery XP</small></div>${i < t.idx ? ic('check') : i === t.idx ? '<span class="here">NOW</span>' : ic('lock')}</div>`).join('')}</div>
-    <p class="note" style="margin-top:.6rem">Each check-in adds +${G.CONST.MASTERY_XP} Mastery XP to this protocol. Archived protocols keep their mastery.</p>`, { label: 'Protocol mastery', nofocus: true });
+    <p class="note" style="margin-top:.6rem">Each check-in adds +${G.CONST.MASTERY_XP} Mastery XP to this habit. Archived habits keep their mastery.</p>`, { label: 'Habit Mastery', nofocus: true });
 }
 function dayModal(d) {
   const r = S.days[d] || {}, comps = S.completions[d] || {};
-  const rows = Object.keys(comps).map(id => { const h = S.habits.find(x => x.id === id); return `<div class="drow"><div class="qicon" style="--qc:${colorOf(h ? h.icon : 'check')}">${ic(h ? h.icon : 'check')}</div>${esc(h ? h.name : 'Removed protocol')}<span>+${comps[id].xp} XP</span></div>`; });
+  const rows = Object.keys(comps).map(id => { const h = S.habits.find(x => x.id === id); return `<div class="drow"><div class="qicon" style="--qc:${colorOf(h ? h.icon : 'check')}">${ic(h ? h.icon : 'check')}</div>${esc(h ? h.name : 'Removed habit')}<span>+${comps[id].xp} XP</span></div>`; });
   if (r.dq) rows.push(`<div class="drow"><div class="qicon">${ic('bolt')}</div>Daily Mission cleared<span>+${r.dq} XP</span></div>`);
   if (r.penalty) rows.push(`<div class="drow"><div class="qicon" style="--qc:#b5575f">${ic('close')}</div>Deviation<span class="neg">−${r.penalty} XP</span></div>`);
-  if (r.frozen) rows.push(`<div class="drow"><div class="qicon">${ic('shield')}</div>Contingency used<span style="color:var(--accent)">Saved</span></div>`);
+  if (r.frozen) rows.push(`<div class="drow"><div class="qicon">${ic('shield')}</div>Streak Freeze used<span style="color:var(--accent)">Saved</span></div>`);
   openSheet(`${sheetHead('calendar', fmtDate(d, { weekday: 'long', month: 'short', day: 'numeric' }), 'Day summary')}${rows.join('') || '<div class="empty"><b>Nothing logged</b>No activity on this day.</div>'}`, { label: 'Day summary', nofocus: true });
 }
 function titleSheet(id) {
   const t = G.TITLES.find(x => x.id === id); if (!t) return;
   const ctx = G.context(S, today()), at = S.unlocked.titles[id], eq = currentTitle(), isEq = eq && eq.id === id, p = Math.min(t.target, Math.floor(t.progress(ctx)));
-  openSheet(`${sheetHead(at ? t.icon : 'lock', esc(t.name), esc(t.cat) + ' designation')}
+  openSheet(`${sheetHead(at ? t.icon : 'lock', esc(t.name), esc(t.cat) + ' title')}
     <div class="kv"><div><span>Status</span><b style="color:${isEq ? '#6fae8a' : at ? 'var(--accent)' : '#7d8895'}">${isEq ? 'Assigned' : at ? 'Unlocked' : 'Locked'}</b></div><div><span>Requirement</span><b>${esc(t.desc)}</b></div>${at ? `<div><span>Unlocked</span><b>${fmtDate(G.keyOf(new Date(at)), { month: 'short', day: 'numeric', year: 'numeric' })}</b></div>` : `<div><span>Progress</span><b>${fmt(p)} / ${fmt(t.target)}</b></div>`}</div>
     ${at ? '' : `<div class="bar" style="margin-top:.6rem"><i style="width:${(p / t.target) * 100}%"></i></div>`}
-    <div class="sheet-actions"><button class="btn ghost" data-act="sheet-close">Close</button>${at && !isEq ? `<button class="btn" data-act="equip-title" data-id="${id}">Assign designation</button>` : `<button class="btn ghost" disabled style="opacity:.5">${isEq ? 'Assigned' : 'Locked'}</button>`}</div>`, { label: 'Designation details', nofocus: true });
+    <div class="sheet-actions"><button class="btn ghost" data-act="sheet-close">Close</button>${at && !isEq ? `<button class="btn" data-act="equip-title" data-id="${id}">Assign title</button>` : `<button class="btn ghost" disabled style="opacity:.5">${isEq ? 'Assigned' : 'Locked'}</button>`}</div>`, { label: 'title details', nofocus: true });
 }
 function equipTitle(id) {
   const t = G.TITLES.find(x => x.id === id); if (!t || !S.unlocked.titles[id]) return; closeSheet();
-  Notice.show({ title: 'ASSIGN DESIGNATION?', subtitle: esc(t.name), tone: '#b99a5c', dismissible: true, bodyHTML: `<div class="nw-head"><span class="qicon" style="--qc:#b99a5c">${ic(t.icon)}</span><div><b>${esc(t.name)}</b><span>${esc(t.desc)}</span></div></div>`, secondary: { label: 'CANCEL' },
-    primary: { label: 'ASSIGN', onClick: () => { S.profile.equippedTitle = id; save(); render(); Notice.show({ title: 'DESIGNATION ASSIGNED', subtitle: esc(t.name), tone: '#b99a5c', sound: 'unlock', bodyHTML: `<div class="nw-rows"><div><span>Assigned</span><b>${esc(t.name)}</b></div></div>`, quote: 'Designation applied to profile.' }); } } });
+  Notice.show({ title: 'ASSIGN title?', subtitle: esc(t.name), tone: '#b99a5c', dismissible: true, bodyHTML: `<div class="nw-head"><span class="qicon" style="--qc:#b99a5c">${ic(t.icon)}</span><div><b>${esc(t.name)}</b><span>${esc(t.desc)}</span></div></div>`, secondary: { label: 'CANCEL' },
+    primary: { label: 'ASSIGN', onClick: () => { S.profile.equippedTitle = id; save(); render(); Notice.show({ title: 'title ASSIGNED', subtitle: esc(t.name), tone: '#b99a5c', sound: 'unlock', bodyHTML: `<div class="nw-rows"><div><span>Assigned</span><b>${esc(t.name)}</b></div></div>`, quote: 'title applied to profile.' }); } } });
 }
 function themeOpen(id) {
   const th = G.THEMES.find(x => x.id === id); if (!th) return;
@@ -663,8 +701,8 @@ function themeOpen(id) {
   if (st.owned) return equip();
   if (st.buy) {
     const bal = G.hcBalance(S).balance;
-    if (bal < st.cost) return Notice.show({ title: 'NOT ENOUGH RC', tone: '#b5575f', dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>${esc(th.name)} theme</span><b>${st.cost} RC</b></div><div><span>Your balance</span><b>${fmt(bal)} RC</b></div></div><p style="margin:.6rem 0 0;font-size:.78rem;color:#aeb7c2">Earn Research Credits from qualifications and challenges.</p>` });
-    return Notice.show({ title: 'UNLOCK DISPLAY MODE?', subtitle: esc(th.name), dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>Cost</span><b>${st.cost} RC</b></div><div><span>Balance after</span><b>${fmt(bal - st.cost)} RC</b></div></div>`, secondary: { label: 'CANCEL' },
+    if (bal < st.cost) return Notice.show({ title: 'NOT ENOUGH HC', tone: '#b5575f', dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>${esc(th.name)} theme</span><b>${st.cost} HC</b></div><div><span>Your balance</span><b>${fmt(bal)} HC</b></div></div><p style="margin:.6rem 0 0;font-size:.78rem;color:#aeb7c2">Earn Hunter Credits from qualifications and challenges.</p>` });
+    return Notice.show({ title: 'UNLOCK DISPLAY MODE?', subtitle: esc(th.name), dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>Cost</span><b>${st.cost} HC</b></div><div><span>Balance after</span><b>${fmt(bal - st.cost)} HC</b></div></div>`, secondary: { label: 'CANCEL' },
       primary: { label: 'UNLOCK', onClick: () => { S.purchases.push({ id, cost: st.cost, at: Date.now() }); S.settings.theme = id; save(); applyTheme(); render(); toast(`${th.name} unlocked and equipped`); } } });
   }
   Notice.show({ title: 'DISPLAY MODE LOCKED', subtitle: esc(th.name), dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>Requirement</span><b>${esc(st.label || 'Locked')}</b></div></div>` });
@@ -672,24 +710,27 @@ function themeOpen(id) {
 
 /* ============================== daily quest ============================== */
 function showDQ() {
-  if (S.dailyQuest.state !== 'available') return;
-  const sched = G.scheduledHabits(S, today());
-  Notice.show({ title: 'DAILY MISSION', subtitle: 'AVAILABLE', sound: 'notice',
-    bodyHTML: `<ul class="nw-list">${sched.length ? sched.slice(0, 6).map(h => `<li>${ic(h.icon)}${esc(h.name)}</li>`).join('') + (sched.length > 6 ? `<li>…and ${sched.length - 6} more</li>` : '') : '<li>No protocols scheduled today. Add a protocol first.</li>'}</ul>
-      <div class="nw-rows"><div><span>Reward</span><b>+${G.CONST.DAILY_QUEST_BONUS} XP</b></div><div><span>If you fail</span><b style="color:#c58790">−${G.CONST.DAILY_QUEST_FAIL_PENALTY} XP</b></div></div>`,
-    quote: 'Clear every scheduled protocol before the day ends.',
-    secondary: { label: 'DECLINE', onClick: () => { G.dqDecline(S); save(); render(); toast('Daily Mission declined'); } },
-    primary: { label: 'ACCEPT', onClick: () => { G.dqAccept(S, today()); mutate(() => {}); toast('Daily Mission accepted'); } } });
+  if (S.dailyQuest.state !== 'available' || dqNoticeQueued) return;
+  const sched=G.scheduledHabits(S,today());
+  try { if(navigator.vibrate) navigator.vibrate([70,35,70]); } catch (_) {}
+  dqNoticeQueued=true;
+  Notice.show({ title:'DAILY MISSION',subtitle:'AVAILABLE',sound:'notice',systemAlert:true,
+    bodyHTML:`<ul class="nw-list mission-stagger">${sched.length?sched.slice(0,G.CONST.MAX_ACTIVE_HABITS).map(h=>`<li>${ic(h.icon)}${esc(h.name)}</li>`).join(''):'<li>No habits scheduled today. Add a habit first.</li>'}</ul><div class="nw-rows"><div><span>REWARD</span><b>+${G.CONST.DAILY_QUEST_BONUS} Core XP</b></div><div><span>RISK · accepted, then failed</span><b style="color:#c58790">−${G.CONST.DAILY_QUEST_FAIL_PENALTY} Core XP</b></div><div><span>Declined or ignored</span><b style="color:#c58790">−${G.CONST.DAILY_QUEST_DECLINE_PENALTY} Core XP</b></div><div><span>Time remaining</span><b id="mission-countdown">--:--:--</b></div></div>`,
+    quote:'Clear every scheduled habit before the day ends.',
+    secondary:{label:'DECLINE',onClick:()=>{dqNoticeQueued=false;G.dqDecline(S);save();render();toast('Daily Mission declined');}},
+    primary:{label:'ACCEPT',onClick:()=>{dqNoticeQueued=false;G.dqAccept(S,today());mutate(()=>{});toast('Daily Mission accepted');}}});
+  const update=()=>{const el=$('#mission-countdown');if(!el){if(!Notice.busy){clearInterval(dqTimer);dqTimer=null;}return;}const end=new Date();end.setHours(24,0,0,0);const n=Math.max(0,end-Date.now());el.textContent=`${pad(Math.floor(n/3600000))}:${pad(Math.floor(n/60000)%60)}:${pad(Math.floor(n/1000)%60)}`;};
+  clearInterval(dqTimer);update();dqTimer=setInterval(update,1000);
 }
 function reportEvents(events) {
   if (!events || !events.length) return;
   const f = events.find(e => e.type === 'dqFailed');
   if (f) Notice.show({ title: 'DAILY MISSION', subtitle: 'FAILED', tone: '#b5575f', sound: 'penalty', bodyHTML: `<div class="nw-rows"><div><span>Deviation</span><b>−${G.CONST.DAILY_QUEST_FAIL_PENALTY} XP</b></div></div>`, quote: 'Schedule another mission in Settings when you are ready.' });
   const pen = events.filter(e => e.type === 'penalty').reduce((a, e) => a + e.xp, 0), lost = events.find(e => e.type === 'comboLost');
-  if (events.some(e => e.type === 'frozen')) toast('A contingency protected your continuity');
-  else if (lost) toast(`Continuity lost (${lost.combo} days)${pen ? ` · −${pen} XP` : ''}`);
-  else if (pen) toast(`Missed protocols cost ${pen} XP`);
-  else if (events.some(e => e.type === 'freeze')) toast('Contingency earned!');
+  if (events.some(e => e.type === 'frozen')) toast('A Streak Freeze protected your Streak');
+  else if (lost) toast(`Streak lost (${lost.combo} days)${pen ? ` · −${pen} XP` : ''}`);
+  else if (pen) toast(`Missed habits cost ${pen} XP`);
+  else if (events.some(e => e.type === 'freeze')) toast('Streak Freeze earned!');
 }
 
 /* ============================== onboarding & misc notices ============================== */
@@ -710,9 +751,9 @@ function dqFormHTML(w) {
 function dqSheet() {
   const dq = S.dailyQuest, t = today(), list = G.scheduledHabits(S, t), done = id => !!(S.completions[t] && S.completions[t][id]);
   openSheet(`${sheetHead('scroll', 'Daily Mission', DQ_LABEL[dq.state])}
-    <div class="kv" style="margin-bottom:.6rem"><div><span>Goal</span><b>Clear every scheduled protocol today</b></div><div><span>Reward</span><b style="color:var(--gold)">+${G.CONST.DAILY_QUEST_BONUS} Core XP</b></div><div><span>If you fail</span><b style="color:#c58790">${G.CONST.DAILY_QUEST_FAIL_PENALTY} Core XP</b></div><div><span>Missions cleared</span><b>${dq.completed || 0}</b></div></div>
+    <div class="kv" style="margin-bottom:.6rem"><div><span>Goal</span><b>Clear every scheduled habit today</b></div><div><span>Reward</span><b style="color:var(--gold)">+${G.CONST.DAILY_QUEST_BONUS} Core XP</b></div><div><span>If you fail</span><b style="color:#c58790">${G.CONST.DAILY_QUEST_FAIL_PENALTY} Core XP</b></div><div><span>Missions cleared</span><b>${dq.completed || 0}</b></div></div>
     <p class="note" style="text-align:left;padding:0 0 .5rem">Daily Missions only give Core XP, never attribute or mastery XP.</p>
-    <div class="field"><span class="lab">Today’s protocols</span>${list.map(h => `<div class="drow"><div class="qicon" style="--qc:${ac(h.attr)}">${ic(done(h.id) ? 'check' : G.ATTRS[h.attr].icon)}</div>${esc(h.name)}<span style="${done(h.id) ? '' : 'color:#76818e'}">${done(h.id) ? 'Done' : 'To do'}</span></div>`).join('') || '<div class="empty" style="padding:.5rem 0">No protocols scheduled today.</div>'}</div>
+    <div class="field"><span class="lab">Today’s habits</span>${list.map(h => `<div class="drow"><div class="qicon" style="--qc:${ac(h.attr)}">${ic(done(h.id) ? 'check' : G.ATTRS[h.attr].icon)}</div>${esc(h.name)}<span style="${done(h.id) ? '' : 'color:#76818e'}">${done(h.id) ? 'Done' : 'To do'}</span></div>`).join('') || '<div class="empty" style="padding:.5rem 0">No habits scheduled today.</div>'}</div>
     ${dq.state === 'available' ? `<button class="btn" data-act="dq-respond" style="margin-bottom:.6rem">Respond to mission</button>` : ''}
     ${dqFormHTML('sheet')}`, { label: 'Daily Mission', nofocus: true });
 }
@@ -724,7 +765,7 @@ function openOnboarding() { ob = ob || { step: 'welcome', name: '', bd: '', ls: 
 function renderOb() {
   let inner;
   if (ob.step === 'welcome') {
-    inner = `<div class="ob-hero"><img src="assets/branding/hunterarsenal-logo.png" data-fallback="assets/fallback/logo-emblem.svg" alt=""><h2>HUNTER ACCESS</h2><p>A human research program.<br>Log protocols. Build consistency. Measure progress.</p></div>
+    inner = `<div class="ob-hero"><img src="assets/branding/hunterarsenal-logo.png" data-fallback="assets/fallback/logo-emblem.svg" alt=""><h2>HUNTER ACCESS</h2><p>A human research program.<br>Log habits. Build consistency. Measure progress.</p></div>
       <button class="btn" data-act="ob-next">Initialize</button><button class="btn ghost" data-act="import">Already a Hunter? Import backup</button>`;
   } else if (ob.step === 'create') {
     inner = `${sheetHead('user', 'Create your Hunter', 'Every Hunter begins at Level 1', true).replace(/<button class="xbtn".*?<\/button>/, '')}
@@ -735,9 +776,9 @@ function renderOb() {
       <div class="field"><label for="o-ls">Estimated lifespan (years)</label><input id="o-ls" type="number" min="30" max="120" class="input" value="${ob.ls}" data-input="ob-ls"></div>
       <div class="sheet-actions"><button class="btn ghost" data-act="ob-back">Back</button><button class="btn" data-act="ob-next">Continue</button></div>`;
   } else {
-    inner = `${sheetHead('list', 'Starter Protocols', 'Initial protocols', true).replace(/<button class="xbtn".*?<\/button>/, '')}
+    inner = `${sheetHead('list', 'Starter habits', 'Initial habits', true).replace(/<button class="xbtn".*?<\/button>/, '')}
       <div class="starters">${STARTERS.map((h, i) => `<button class="starter" role="checkbox" aria-checked="${ob.starters[i]}" data-act="ob-starter" data-i="${i}"><span class="qicon" style="--qc:${ac(h.attr)}">${ic(h.icon)}</span><span class="qtext"><b>${h.name}</b><span>Daily · ${h.desc}</span></span>${atag(h.attr)}<span class="tick">${ic('check')}</span></button>`).join('')}</div>
-      <p class="note" style="margin:.5rem 0">You can edit or delete these later. Up to ${G.CONST.MAX_ACTIVE_HABITS} active protocols.</p>
+      <p class="note" style="margin:.5rem 0">You can edit or delete these later. Up to ${G.CONST.MAX_ACTIVE_HABITS} active habits.</p>
       <div class="sheet-actions"><button class="btn ghost" data-act="ob-back">Back</button><button class="btn" data-act="ob-finish">Begin Program</button></div>`;
   }
   openSheet(inner, { label: 'Welcome', nofocus: ob.step !== 'create' });
@@ -749,7 +790,7 @@ function finishOnboarding() {
   let added = 0; STARTERS.forEach((h, i) => { if (ob.starters[i]) { S.habits.push({ id: Store.uid(), created: today(), archived: false, days: null, ...h }); added++; } });
   S.meta.onboarded = true; S.meta.lastSeenVersion = window.APP_VERSION; ob = null; G.refreshDay(S, today()); save(); closeSheet(); render();
   Notice.show({ title: 'SYSTEM', subtitle: 'INITIALIZED', sound: 'unlock', primary: { label: 'ENTER SYSTEM' },
-    bodyHTML: `<ul class="nw-list"><li>${ic('check')}Hunter identified <span style="margin-left:auto;font-family:var(--font-mono);color:var(--tone)">${esc(S.profile.hunterId)}</span></li><li>${ic('check')}System linked <span style="margin-left:auto;color:#8c97a4">on this device</span></li><li>${ic('check')}Starter protocols added <span style="margin-left:auto;color:#8c97a4">${added}</span></li><li>${ic('check')}Ready for assignment</li></ul>`, quote: 'Discipline is the system.' });
+    bodyHTML: `<ul class="nw-list"><li>${ic('check')}Hunter identified <span style="margin-left:auto;font-family:var(--font-mono);color:var(--tone)">${esc(S.profile.hunterId)}</span></li><li>${ic('check')}System linked <span style="margin-left:auto;color:#8c97a4">on this device</span></li><li>${ic('check')}Starter habits added <span style="margin-left:auto;color:#8c97a4">${added}</span></li><li>${ic('check')}Ready for assignment</li></ul>`, quote: 'Discipline is the system.' });
 }
 function whatsNew(force) {
   const entry = (window.CHANGELOG || [])[0]; if (!entry) return;
@@ -757,25 +798,26 @@ function whatsNew(force) {
 }
 function hcInfo() {
   const b = G.hcBalance(S);
-  Notice.show({ title: 'RESEARCH CREDITS', dismissible: true, tone: '#b99a5c', bodyHTML: `<div class="nw-rows"><div><span>Balance</span><b>${fmt(b.balance)} RC</b></div><div><span>Earned</span><b>${fmt(b.earned)} RC</b></div><div><span>Spent</span><b>${fmt(b.spent)} RC</b></div></div><p style="margin:.6rem 0 0;font-size:.78rem;color:#aeb7c2">RC is a cosmetic currency earned from qualifications and operations. It only unlocks display modes. It never buys XP, levels or attributes.</p>` });
+  Notice.show({ title: 'Hunter Credits', dismissible: true, tone: '#b99a5c', bodyHTML: `<div class="nw-rows"><div><span>Balance</span><b>${fmt(b.balance)} HC</b></div><div><span>Earned</span><b>${fmt(b.earned)} HC</b></div><div><span>Spent</span><b>${fmt(b.spent)} HC</b></div></div><p style="margin:.6rem 0 0;font-size:.78rem;color:#aeb7c2">HC is a cosmetic currency earned from qualifications and operations. It only unlocks display modes. It never buys XP, levels or attributes.</p>` });
 }
 
 /* ============================== photo, backup ============================== */
-function pickAvatar(cb) {
-  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
-  inp.onchange = () => {
-    const f = inp.files[0]; if (!f || !/^image\//.test(f.type)) return;
-    const img = new Image(), url = URL.createObjectURL(f);
-    img.onload = () => {
-      const s = 256, c = document.createElement('canvas'); c.width = c.height = s; const m = Math.min(img.width, img.height);
-      c.getContext('2d').drawImage(img, (img.width - m) / 2, (img.height - m) / 2, m, m, 0, 0, s, s);
-      S.profile.avatar = c.toDataURL('image/jpeg', .86); URL.revokeObjectURL(url); save(); render(); if (cb) cb(); else toast('Photo updated');
-    };
-    img.onerror = () => { URL.revokeObjectURL(url); toast('Could not read that image'); };
-    img.src = url;
-  };
-  inp.click();
+let photoDraft = null;
+function photoPreview() {
+  if (!photoDraft) return;
+  const box=$('#photo-crop'),img=$('#photo-crop-img'),slider=$('#photo-zoom'); if(!box||!img)return;
+  const size=box.clientWidth, base=Math.max(size/photoDraft.image.naturalWidth,size/photoDraft.image.naturalHeight), scale=base*photoDraft.zoom;
+  img.style.width=`${photoDraft.image.naturalWidth*scale}px`;img.style.height=`${photoDraft.image.naturalHeight*scale}px`;
+  img.style.left=`${(size-photoDraft.image.naturalWidth*scale)/2+photoDraft.x}px`;img.style.top=`${(size-photoDraft.image.naturalHeight*scale)/2+photoDraft.y}px`;
+  if(slider)slider.value=String(photoDraft.zoom);
 }
+function pickAvatar(cb) {
+  const inp=document.createElement('input');inp.type='file';inp.accept='image/*';
+  inp.onchange=()=>{const f=inp.files&&inp.files[0];if(!f||!/^image\//.test(f.type))return;const url=URL.createObjectURL(f),image=new Image();
+    image.onload=()=>{photoDraft={url,image,zoom:1,x:0,y:0,cb};openSheet(`${sheetHead('camera','Profile Photo','Drag to position · pinch or use the zoom control')}<div id="photo-crop"><img id="photo-crop-img" src="${url}" alt="Photo preview"></div><label class="photo-zoom">Zoom <input id="photo-zoom" type="range" min="1" max="3" step=".01" value="1"></label><div class="sheet-actions"><button class="btn ghost" data-act="photo-cancel">Cancel</button><button class="btn" data-act="photo-save">Save Photo</button></div>`,{label:'Profile photo editor'});photoPreview();};
+    image.onerror=()=>{URL.revokeObjectURL(url);toast('Could not read that image');};image.src=url;};inp.click();
+}
+function savePhotoCrop(){if(!photoDraft)return;const {image,zoom,x,y,url,cb}=photoDraft,size=384,view=$('#photo-crop'),boxSize=view?view.clientWidth:256,base=Math.max(boxSize/image.naturalWidth,boxSize/image.naturalHeight),scale=base*zoom,dx=(boxSize-image.naturalWidth*scale)/2+x,dy=(boxSize-image.naturalHeight*scale)/2+y,srcX=Math.max(0,Math.min(image.naturalWidth-boxSize/scale,-dx/scale)),srcY=Math.max(0,Math.min(image.naturalHeight-boxSize/scale,-dy/scale)),srcSize=Math.min(boxSize/scale,image.naturalWidth-srcX,image.naturalHeight-srcY),c=document.createElement('canvas');c.width=c.height=size;c.getContext('2d').drawImage(image,srcX,srcY,srcSize,srcSize,0,0,size,size);S.profile.avatar=c.toDataURL('image/jpeg',.82);URL.revokeObjectURL(url);photoDraft=null;closeSheet();save();render();if(cb)cb();else toast('Photo updated');}
 function exportData() {
   const blob = new Blob([Store.exportJSON(S)], { type: 'application/json' });
   HA.Card.download(blob, `hunterarsenal-backup-${today()}.json`); toast('Backup exported');
@@ -803,14 +845,14 @@ function importData() {
         }
       }
       const next = Store.importJSON(text);
-      Notice.show({ title: 'RESTORE BACKUP?', tone: '#b98a50', dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>Protocols</span><b>${next.habits.length}</b></div><div><span>Check-ins</span><b>${Object.values(next.completions).reduce((a, d) => a + Object.keys(d).length, 0)}</b></div></div><p style="margin:.6rem 0 0;font-size:.78rem;color:#aeb7c2">This replaces everything currently on this device.</p>`,
+      Notice.show({ title: 'RESTORE BACKUP?', tone: '#b98a50', dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>Habits</span><b>${next.habits.length}</b></div><div><span>Check-ins</span><b>${Object.values(next.completions).reduce((a, d) => a + Object.keys(d).length, 0)}</b></div></div><p style="margin:.6rem 0 0;font-size:.78rem;color:#aeb7c2">This replaces everything currently on this device.</p>`,
         secondary: { label: 'CANCEL' }, primary: { label: 'RESTORE', onClick: () => { S = next; S.meta.onboarded = true; ob = null; closeSheet(); const r = G.processDays(S, today()); G.refreshDay(S, today()); save(); applyTheme(); render(); toast('Backup restored'); reportEvents(r.events); } } });
     } catch (e) { toast('That file is not a valid HunterArsenal backup'); }
   };
   inp.click();
 }
 function resetAll() {
-  Notice.show({ title: 'RESET ALL DATA?', tone: '#b5575f', sound: 'penalty', dismissible: true, bodyHTML: '<p style="margin:0;font-size:.85rem;color:#d5dbe2">Every protocol, XP, designation and setting on this device will be deleted. Export a backup first if you might want it back.</p>',
+  Notice.show({ title: 'RESET ALL DATA?', tone: '#b5575f', sound: 'penalty', dismissible: true, bodyHTML: '<p style="margin:0;font-size:.85rem;color:#d5dbe2">Every habit, XP, title and setting on this device will be deleted. Export a backup first if you might want it back.</p>',
     secondary: { label: 'CANCEL' }, primary: { label: 'RESET', onClick: () => { Store.wipe(); S = Store.defaults(); ob = null; view = 'home'; homeTab = 'today'; bonusSub = null; profileSub = null; applyTheme(); render(); openOnboarding(); } } });
 }
 
@@ -823,6 +865,12 @@ document.addEventListener('click', (e) => {
   const act = el.dataset.act, d = el.dataset;
   switch (act) {
     case 'nav': view = d.v; menuHabit = null; menuSkill = null; if (view !== 'profile') profileSub = null; if (view === 'home') bonusSub = null; closeSheet(); render(); $('#scroll').scrollTop = 0; break;
+    case 'settings-open': settingsSub = d.v; render(); $('#scroll').scrollTop = 0; break;
+    case 'settings-back': settingsSub = null; render(); break;
+    case 'shop-open': view='home'; homeTab='bonus'; bonusSub='themes'; render(); break;
+    case 'rules': view = 'rules'; render(); $('#scroll').scrollTop = 0; break;
+    case 'rules-back': view = 'home'; render(); break;
+    case 'rules-ack': S.meta.rulesSeen = true; S.meta.rulesVersion = '2.4.0'; save(); view = 'home'; render(); break;
     case 'tab': homeTab = d.t; bonusSub = null; menuSkill = null; render(); break;
     case 'toggle': toggleHabit(d.id); break;
     case 'mastery-open': masteryModal(d.id); break;
@@ -858,6 +906,16 @@ document.addEventListener('click', (e) => {
     case 'title-open': titleSheet(d.id); break;
     case 'equip-title': equipTitle(d.id); break;
     case 'theme-open': themeOpen(d.id); break;
+    case 'shop-tab': if (['Display Modes','Photo Borders','Name Plates'].includes(d.v)) { S.settings.shopTab=d.v; save(); render(); } break;
+    case 'cosmetic-open': {
+      const item=G.COSMETICS.find(x=>x.id===d.id); if(!item) break;
+      const key=item.type==='border'?'border':'namePlate', equipped=S.settings[key]===item.id;
+      if(equipped) S.settings[key]='none';
+      else if(S.purchases.some(p=>p.id===item.id)) S.settings[key]=item.id;
+      else if(G.hcBalance(S).balance<item.cost) { toast('Not enough Hunter Credits'); break; }
+      else { S.purchases.push({id:item.id,cost:item.cost,at:Date.now()}); S.settings[key]=item.id; }
+      save(); render(); break;
+    }
     case 'hc-info': hcInfo(); break;
     case 'rank-modal': rankModal(); break;
     case 'class-modal': classModal(d.a); break;
@@ -868,11 +926,15 @@ document.addEventListener('click', (e) => {
       HA.Card.toBlob(cv).then(b => { const name = `hunters-license-${S.profile.hunterId}.png`; if (act === 'card-save') { HA.Card.download(b, name); toast('License saved as image'); } else return HA.Card.share(b, name).then(r => { if (r === 'downloaded') toast('Sharing is not supported here. Image saved instead.'); }); }).catch(() => toast('Could not create the image'));
       break; }
     case 'avatar': pickAvatar(); break;
+    case 'photo-save': savePhotoCrop(); break;
+    case 'photo-cancel': if(photoDraft){URL.revokeObjectURL(photoDraft.url);photoDraft=null;} closeSheet(); break;
     case 'avatar-remove': S.profile.avatar = null; save(); render(); break;
     case 'save-name': { const v = $('#f-name').value.trim(); if (!v) { toast('Name cannot be empty'); break; } S.profile.name = v.slice(0, 24); save(); render(); toast('Name saved'); break; }
     case 'save-life': { S.profile.birthdate = /^\d{4}-\d{2}-\d{2}$/.test($('#f-bd').value) ? $('#f-bd').value : ''; S.profile.lifespan = Math.min(120, Math.max(30, Number($('#f-ls').value) || 80)); save(); render(); toast('Mission Clock saved'); break; }
     case 'sound': S.settings.sound = d.v === '1'; HA.Sound.enabled = S.settings.sound; save(); render(); HA.Sound.play('unlock'); break;
     case 'penalty': S.settings.penalties = d.v === '1'; save(); render(); break;
+    case 'auto-freeze': S.settings.autoFreeze = d.v === '1'; save(); render(); break;
+    case 'rest-day': if (!G.declareRestDay(S, today())) toast(S.streak.freezes ? 'Rest Day is already set' : 'A Streak Freeze is required for a Rest Day'); else { save(); render(); toast('Rest Day declared. One Streak Freeze used.'); } break;
     case 'dq-open': showDQ(); break;
     case 'dq-mode': { const f = e.target.closest('.dqform'); const tm = f && f.querySelector('.dq-time'); if (tm && tm.value) dqUI.time = tm.value; dqUI.mode = d.v; if (f && f.dataset.w === 'sheet') dqSheet(); else render(); break; }
     case 'dq-save': {
@@ -889,8 +951,8 @@ document.addEventListener('click', (e) => {
     case 'dq-off': { G.dqStopRepeat(S); dqUI.mode = null; save(); closeSheet(); render(); toast('Daily Mission turned off'); break; }
     case 'week': weekOffset = Math.min(0, weekOffset + Number(d.v)); render(); break;
     case 'day-open': dayModal(d.d); break;
-    case 'restore': if (G.activeHabits(S).length >= G.CONST.MAX_ACTIVE_HABITS) { limitNotice(); break; } mutate(() => { const h = S.habits.find(x => x.id === d.id); if (h) h.archived = false; }); toast('Protocol restored with its mastery'); break;
-    case 'install': if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.finally(() => { deferredPrompt = null; render(); }); } break;
+    case 'restore': if (G.activeHabits(S).length >= G.CONST.MAX_ACTIVE_HABITS) { limitNotice(); break; } mutate(() => { const h = S.habits.find(x => x.id === d.id); if (h) h.archived = false; }); toast('Habit restored with its mastery'); break;
+    case 'install': if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.then(choice => { if (choice && choice.outcome === 'accepted') toast('Installation started'); deferredPrompt = null; render(); }).catch(() => { deferredPrompt = null; render(); }); } break;
     case 'update': checkUpdate(); break;
     case 'whatsnew': whatsNew(true); break;
     case 'export': exportEncrypted(); break;
@@ -915,6 +977,7 @@ document.addEventListener('change', (e) => {
   if (k === 'ach-sort') { achSort = e.target.value; render(); }
   else if (k === 'title-cat') { titleCat = e.target.value; render(); }
   else if (k === 'theme') { if (G.THEMES.some(t => t.id === e.target.value)) { S.settings.theme = e.target.value; save(); applyTheme(); render(); } }
+  else if (k === 'shop-tab') { S.settings.shopTab=e.target.value; save(); render(); }
   else if (k === 'h-sched') { syncDraftText(); draft.sched = e.target.value; if (draft.sched === 'custom' && !(draft.days && draft.days.length)) draft.days = [new Date().getDay()]; renderHabitForm(true); }
 });
 document.addEventListener('input', (e) => {
@@ -923,10 +986,16 @@ document.addEventListener('input', (e) => {
   else if (k === 'ob-name') ob.name = e.target.value;
   else if (k === 'ob-bd') ob.bd = e.target.value;
   else if (k === 'ob-ls') ob.ls = e.target.value;
+  else if (k === 'photo-zoom' && photoDraft) { photoDraft.zoom=Number(e.target.value)||1;photoPreview(); }
   else if (k === 's-name' || k === 's-desc') { syncDraftText(); const a = $('#s-ncnt'), b = $('#s-dcnt'); if (a) a.textContent = `${draft.name.length}/50`; if (b) b.textContent = `${draft.desc.length}/100`; }
   else if (k === 'title-search') { titleQuery = e.target.value; const l = $('#title-list'); if (l) { const ctx = G.context(S, today()), eq = currentTitle(); let list = G.TITLES.map(t => ({ t, at: S.unlocked.titles[t.id] })); if (titleCat !== 'All') list = list.filter(x => x.t.cat === titleCat); if (titleFilter === 'unlocked') list = list.filter(x => x.at); else if (titleFilter === 'locked') list = list.filter(x => !x.at); else if (titleFilter === 'equipped') list = list.filter(x => eq && x.t.id === eq.id); const q = titleQuery.trim().toLowerCase(); if (q) list = list.filter(x => (x.t.name + ' ' + x.t.desc + ' ' + x.t.cat).toLowerCase().includes(q)); l.innerHTML = titleRows(list, ctx, eq); } }
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#layer .sheet') && !HA.Notice.busy) closeSheet(); });
+
+let cropPointers=new Map(), cropGesture=null;
+document.addEventListener('pointerdown',e=>{if(!photoDraft||!e.target.closest('#photo-crop'))return;e.preventDefault();e.target.setPointerCapture(e.pointerId);cropPointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(cropPointers.size===1)cropGesture={x:e.clientX,y:e.clientY,ox:photoDraft.x,oy:photoDraft.y,zoom:photoDraft.zoom};else{const p=[...cropPointers.values()];cropGesture={distance:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),zoom:photoDraft.zoom};}});
+document.addEventListener('pointermove',e=>{if(!photoDraft||!cropPointers.has(e.pointerId))return;cropPointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(cropPointers.size===1&&cropGesture){photoDraft.x=cropGesture.ox+e.clientX-cropGesture.x;photoDraft.y=cropGesture.oy+e.clientY-cropGesture.y;}else if(cropPointers.size===2&&cropGesture){const p=[...cropPointers.values()],distance=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);photoDraft.zoom=Math.max(1,Math.min(3,cropGesture.zoom*distance/Math.max(1,cropGesture.distance)));}photoPreview();});
+for(const type of ['pointerup','pointercancel'])document.addEventListener(type,e=>{if(cropPointers.has(e.pointerId)){cropPointers.delete(e.pointerId);cropGesture=null;if(cropPointers.size===1){const p=[...cropPointers.values()][0];cropGesture={x:p.x,y:p.y,ox:photoDraft?photoDraft.x:0,oy:photoDraft?photoDraft.y:0};}}});
 
 /* ----- drag to reorder ----- */
 document.addEventListener('pointerdown', (e) => {
@@ -961,7 +1030,7 @@ function rollover() {
 }
 setInterval(() => {
   if (today() !== curDay) { rollover(); return; }
-  tickLife(); const cbc = $('#cb-clock'); if (cbc) cbc.textContent = zulu();
+  tickLife(); const cbc = $('#cb-clock'); if (cbc) cbc.textContent = phtClock();
   const dqBefore = JSON.stringify(S.dailyQuest);
   if (G.dqTick(S, Date.now())) { save(); render(); showDQ(); } else if (JSON.stringify(S.dailyQuest) !== dqBefore) { save(); render(); }
 }, 1000);

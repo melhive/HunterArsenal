@@ -2,8 +2,21 @@
  * Bump APP_VERSION and add a CHANGELOG entry to ship an update.
  * Loaded by index.html AND by sw.js (importScripts), so the cache name always matches. */
 (function (g) {
-  g.APP_VERSION = '2.3.0';
+  g.APP_VERSION = '2.4.0';
   g.CHANGELOG = [
+    {
+      version: '2.4.0',
+      date: '2026-10-07',
+      notes: [
+        'Habits, Titles and Hunter Credits terminology with seven-level Habit Mastery',
+        'Updated Core XP, Daily Mission risk, Streak Freeze milestones and Rest Days',
+        'Seven-section Settings hub, Hunter’s Rules and live Versatility radar',
+        'Hunter Credits shop for display modes, photo borders and name plates',
+        'Reliable Hunter License rendering with immediate fallback and optional art redraw',
+        'Profile photo crop preview, zoom and pan controls',
+        'Mobile install manifest, branded icons and refreshed offline cache'
+      ]
+    },
     {
       version: '2.3.0',
       date: '2026-10-07',
@@ -22,7 +35,7 @@
       date: '2026-10-06',
       notes: [
         'New graphite command-terminal color theme',
-        'Operator vocabulary: Protocols, Disciplines, Daily Directives, Designations, Qualifications, Operations and Research Credits',
+        'Profile and progression interface terminology update',
         'App Lock: passcode with optional fingerprint or face unlock (Settings > Security)',
         'Encrypted backups: AES-256 with your passphrase. Plain backups still available',
         'Segmented progress bars, corner-bracket panels and a classification strip'

@@ -26,7 +26,7 @@
   const FOOT_QUOTES = ['SAME PERSON. HIGHER STANDARDS.', 'DISCIPLINE BUILDS FREEDOM.', 'SMALL STEPS. SERIOUS RESULTS.', 'CONSISTENCY IS THE WEAPON.', 'PROGRESS IS A DAILY DECISION.'];
   const BOX_QUOTES = [['CONSISTENCY TURNS', 'ORDINARY PEOPLE INTO', 'LEGENDARY HUNTERS.'], ['SMALL STEPS TODAY.', 'STRONGER HUNTER', 'TOMORROW.'], ['A SHARPER MIND', 'BUILDS A BRIGHTER', 'TOMORROW.'], ['CONSISTENT ACTION', 'TURNS POTENTIAL', 'INTO REAL PROGRESS.']];
 
-  const loadImg = (src) => new Promise((res) => { if (!src) return res(null); const i = new Image(); i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
+  const loadImg = (src) => new Promise((res) => { if (!src) return res(null); let done=false; const finish=v=>{if(!done){done=true;res(v);}}; const i = new Image(); i.onload = () => finish(i); i.onerror = () => finish(null); i.src = src; setTimeout(()=>finish(null),2000); });
   const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
   const hash = (s) => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
   const fmt = n => Math.round(n).toLocaleString('en-US');
@@ -66,6 +66,7 @@
   }
   // draw one of the app's line icons (path / circle / rect markup) onto the canvas
   function icon(c, name, cx, cy, size, color, lw) {
+    if (typeof Path2D === 'undefined') return;
     const ICONS = HA.Icons || {}, src = ICONS[name]; if (!src) return;
     c.save(); c.translate(cx - size / 2, cy - size / 2); c.scale(size / 24, size / 24);
     c.strokeStyle = color; c.lineWidth = lw || 1.8; c.lineCap = 'round'; c.lineJoin = 'round';
@@ -114,13 +115,13 @@
     c.restore();
   }
 
-  async function render(d, canvas) {
+  function draw(d, canvas, assets) {
     canvas.width = W; canvas.height = H;
     const c = canvas.getContext('2d'), G = HA.Game;
-    if (document.fonts && document.fonts.ready) { try { await document.fonts.ready; } catch (e) {} }
+    if (!c) throw new Error('Canvas is unavailable');
+    if (!c.roundRect) c.roundRect = function(x,y,w,h,r){r=Math.min(r||0,w/2,h/2);this.beginPath();this.moveTo(x+r,y);this.lineTo(x+w-r,y);this.quadraticCurveTo(x+w,y,x+w,y+r);this.lineTo(x+w,y+h-r);this.quadraticCurveTo(x+w,y+h,x+w-r,y+h);this.lineTo(x+r,y+h);this.quadraticCurveTo(x,y+h,x,y+h-r);this.lineTo(x,y+r);this.quadraticCurveTo(x,y,x+r,y);this.closePath();};
     const pal = PAL[d.rank] || PAL.E, M = pal.m, S2 = pal.s, TR = pal.t;
-    const [logo0, avatar, art0, art1] = await Promise.all([loadImg('assets/branding/hunterarsenal-logo.png'), loadImg(d.avatar), loadImg(`assets/branding/license-art-${d.rank}.png`), loadImg('assets/branding/license-art.png')]);
-    const logo = logo0 || await loadImg('assets/fallback/logo-mark.svg'), art = art0 || art1;
+    const logo = assets && assets.logo || null, avatar = assets && assets.avatar || null, art = assets && (assets.rankArt || assets.art) || null;
     const ver = 'v' + (g.APP_VERSION || '');
 
     // ---- background
@@ -137,6 +138,7 @@
 
     // ---- header
     if (logo) c.drawImage(logo, 66, 62, 128, 128);
+    else { c.save();c.strokeStyle=hexA(M,.9);c.lineWidth=3;c.beginPath();c.arc(130,126,58,0,Math.PI*2);c.stroke();c.fillStyle='#e6ebf0';c.font=`700 32px ${FONT}`;c.textAlign='center';c.fillText('HA',130,137);c.restore(); }
     text(c, 'Hunter', 232, 124, 70, '#f1f4f8', { weight: 700 });
     text(c, 'Arsenal', 232 + textW(c, 'Hunter', 70, 700) + 4, 124, 70, M, { weight: 700, glow: hexA(M, .7) });
     text(c, 'OFFICIAL HUNTER’S LICENSE', 234, 168, 35, '#e8edf3', { spacing: 10, fit: 690 });
@@ -149,6 +151,7 @@
 
     // ---- photo
     box(c, 62, 224, 304, 336, { color: M, k: 22, trim: TR });
+    const photoBorder=HA.Game.COSMETICS.find(x=>x.id===d.photoBorder); if(photoBorder){c.save();c.strokeStyle=photoBorder.color;c.lineWidth=10;c.shadowColor=hexA(photoBorder.color,.7);c.shadowBlur=14;chamfer(c,62,224,304,336,22);c.stroke();c.restore();}
     c.save(); chamfer(c, 72, 234, 284, 316, 16); c.clip();
     if (avatar) { const s = Math.max(284 / avatar.width, 316 / avatar.height), iw = avatar.width * s, ih = avatar.height * s; c.drawImage(avatar, 72 + (284 - iw) / 2, 234 + (316 - ih) / 2, iw, ih); }
     else { const gg = c.createLinearGradient(72, 234, 356, 550); gg.addColorStop(0, '#26303c'); gg.addColorStop(1, '#10151c'); c.fillStyle = gg; c.fillRect(72, 234, 284, 316); text(c, (d.name || 'H').trim().charAt(0).toUpperCase(), 214, 440, 200, hexA(M, .9), { align: 'center', weight: 700, glow: hexA(M, .6) }); }
@@ -161,20 +164,21 @@
     // ---- name / id / issued
     box(c, 386, 224, 548, 212, { color: M, trim: TR });
     text(c, 'NAME', 418, 266, 21, M, { spacing: 6 });
+    const namePlate=HA.Game.COSMETICS.find(x=>x.id===d.namePlate); if(namePlate){c.save();c.fillStyle=hexA(namePlate.color,.18);c.fillRect(418,280,484,9);c.restore();}
     text(c, d.name.toUpperCase(), 418, 350, 86, '#f1f4f8', { weight: 700, fit: 490, glow: hexA(M, .35) });
     c.save(); c.strokeStyle = hexA(M, .35); c.lineWidth = 1.5; c.beginPath(); c.moveTo(418, 372); c.lineTo(902, 372); c.stroke(); c.restore();
     text(c, 'HUNTER ID', 418, 402, 17, M, { spacing: 5 }); text(c, d.hunterId, 418, 428, 28, '#f1f4f8', { mono: true, weight: 700, spacing: 1 });
     c.save(); c.strokeStyle = hexA(M, .45); c.lineWidth = 2; c.beginPath(); c.moveTo(664, 384); c.lineTo(664, 430); c.stroke(); c.restore();
     text(c, 'ISSUED', 690, 402, 17, M, { spacing: 5 }); text(c, niceDate(d.issuedDate), 690, 428, 28, '#f1f4f8', { mono: true, weight: 700, spacing: 1 });
 
-    // ---- class + designation
+    // ---- class + title
     const pa = G.ATTRS[d.primaryAttribute], pc = VIV[d.primaryAttribute];
     box(c, 386, 452, 548, 108, { color: pc, trim: pc });
     c.save(); c.fillStyle = 'rgba(255,255,255,.06)'; c.beginPath(); c.roundRect(406, 472, 68, 68, 12); c.fill(); c.restore(); icon(c, pa.icon, 440, 506, 40, '#dfe5ec', 1.7);
     text(c, 'CLASS', 490, 490, 16, '#9aa5b4', { spacing: 5 }); text(c, d.class.toUpperCase(), 490, 534, 42, '#f1f4f8', { weight: 700, fit: 196 });
     c.save(); c.strokeStyle = hexA(M, .45); c.lineWidth = 2; c.beginPath(); c.moveTo(704, 470); c.lineTo(704, 542); c.stroke(); c.restore();
     icon(c, 'crown', 742, 506, 38, '#f5c24f', 1.7);
-    text(c, 'DESIGNATION', 774, 490, 15, '#9aa5b4', { spacing: 4, fit: 150 });
+    text(c, 'TITLE', 774, 490, 15, '#9aa5b4', { spacing: 4, fit: 150 });
     const dsg = d.title ? d.title.toUpperCase() : 'UNASSIGNED', dcol = d.title ? '#f5c24f' : '#6a7583';
     c.save(); c.font = `700 30px ${FONT}`; const dw = c.measureText(dsg).width; c.restore();
     if (dw <= 150 || dsg.indexOf(' ') < 0) text(c, dsg, 774, 532, 30, dcol, { weight: 700, fit: 150, glow: d.title ? 'rgba(245,194,79,.4)' : null });
@@ -220,10 +224,10 @@
     // ---- highest mastery + quote
     const hm = d.highestMastery, tc = '#f5c24f';
     box(c, 1124, 580, 420, 150, { color: tc, trim: tc });
-    text(c, 'HIGHEST PROTOCOL MASTERY', 1152, 618, 17, tc, { spacing: 3, fit: 364 });
+    text(c, 'HIGHEST HABIT MASTERY', 1152, 618, 17, tc, { spacing: 3, fit: 364 });
     c.save(); c.fillStyle = hexA(tc, .1); c.strokeStyle = hexA(tc, .7); c.lineWidth = 1.6; c.beginPath(); c.roundRect(1152, 636, 76, 76, 12); c.fill(); c.stroke(); c.restore();
     icon(c, TIER_ICON[Math.min(6, hm.tier || 0)], 1190, 674, 44, tc, 1.6);
-    text(c, hm.rank, 1248, 676, 42, '#f1f4f8', { weight: 700, fit: 270 }); text(c, (hm.habitName || 'NO PROTOCOL YET').toUpperCase(), 1248, 706, 19, '#9aa5b4', { spacing: 3, fit: 270 });
+    text(c, hm.rank, 1248, 676, 42, '#f1f4f8', { weight: 700, fit: 270 }); text(c, (hm.habitName || 'NO habit YET').toUpperCase(), 1248, 706, 19, '#9aa5b4', { spacing: 3, fit: 270 });
     box(c, 1124, 750, 420, 152, { color: M, trim: TR });
     const qb = BOX_QUOTES[hash(d.hunterId + d.rank) % BOX_QUOTES.length];
     qb.forEach((ln, i) => text(c, (i === 0 ? '“' : '') + ln + (i === qb.length - 1 ? '”' : ''), 1156, 804 + i * 34, 21, '#dfe5ec', { mono: true, spacing: 3, weight: 500 }));
@@ -238,7 +242,23 @@
     return canvas;
   }
 
-  const toBlob = (canvas) => new Promise((res, rej) => canvas.toBlob(b => (b ? res(b) : rej(new Error('Could not create image'))), 'image/png'));
+  async function render(d, canvas) {
+    try { draw(d,canvas,null); }
+    catch(e) { const c=canvas.getContext('2d'); if(c){canvas.width=W;canvas.height=H;c.fillStyle='#0b0e12';c.fillRect(0,0,W,H);c.fillStyle='#e6ebf0';c.font='600 32px sans-serif';c.fillText('Hunter License preview could not be drawn.',48,90);} throw e; }
+    const jobs=Promise.all([
+      loadImg('assets/branding/hunterarsenal-logo.png').then(x=>x||loadImg('assets/fallback/logo-mark.svg')),
+      loadImg(d.avatar),loadImg(`assets/branding/license-art-${d.rank}.png`),loadImg('assets/branding/license-art.png'),
+      document.fonts&&document.fonts.ready?Promise.race([document.fonts.ready,new Promise(r=>setTimeout(r,2000))]).then(()=>null):Promise.resolve(null)
+    ]);
+    const [logo,avatar,rankArt,art]=await Promise.race([jobs,new Promise(resolve=>setTimeout(()=>resolve([null,null,null,null,null]),2000))]);
+    try { draw(d,canvas,{logo,avatar,rankArt,art}); } catch(e) { console.warn('Hunter License redraw failed',e); }
+    return canvas;
+  }
+
+  const toBlob = (canvas) => new Promise((res, rej) => {
+    if (canvas.toBlob) return canvas.toBlob(b => (b ? res(b) : rej(new Error('Could not create image'))), 'image/png');
+    try { const data=canvas.toDataURL('image/png'), raw=atob(data.split(',')[1]), bytes=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++)bytes[i]=raw.charCodeAt(i);res(new Blob([bytes],{type:'image/png'})); } catch(e) { rej(e); }
+  });
   function download(blob, name) {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);

@@ -16,6 +16,7 @@ importScripts('./js/version.js');
 const CACHE = 'hunter-arsenal-' + self.APP_VERSION;
 const CORE = [
   './', './index.html', './css/styles.css',
+  './manifest.json', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-192.png', './icons/icon-maskable-512.png',
   './js/version.js', './js/gamification.js', './js/storage.js', './js/security.js', './js/systemwindow.js', './js/hunter-card.js', './js/app.js',
   './assets/fallback/logo-mark.svg', './assets/fallback/logo-emblem.svg', './assets/fallback/city-banner.svg', './assets/fallback/hero-scene.svg', './assets/fallback/life-scene.svg'
 ];

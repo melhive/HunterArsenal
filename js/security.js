@@ -108,7 +108,7 @@
 
   function padHTML(c) {
     const k = n => `<button class="lk-key" data-k="${n}" aria-label="${n}">${n}</button>`;
-    const bio = c.bio ? `<button class="lk-key lk-fn" data-lk="bio" aria-label="Use biometrics"><svg class="ico" viewBox="0 0 24 24"><path d="M12 11v3a5 5 0 0 1-1 3M8 14a4 4 0 0 1 8 0v1M5 12a7 7 0 0 1 14 0v2M3 15a9 9 0 0 1 18 0"/></svg></button>` : '<span></span>';
+    const bio = c.bio ? `<button class="lk-key lk-fn" data-lk="bio" aria-label="Use device unlock"><svg class="ico" viewBox="0 0 24 24"><circle cx="8" cy="12" r="4"/><path d="M12 12h9m-3 0v3m-3-3v2"/></svg></button>` : '<span></span>';
     return `<div class="lk-pad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(k).join('')}${bio}${k(0)}<button class="lk-key lk-fn" data-lk="del" aria-label="Delete"><svg class="ico" viewBox="0 0 24 24"><path d="M21 5H9l-6 7 6 7h12zM15 9l-4 6M11 9l4 6"/></svg></button></div>`;
   }
   function drawDots() {
@@ -163,7 +163,7 @@
   async function bioUnlock(silent) {
     if (busy) return; busy = true;
     try { if (await bioAuth()) { busy = false; const c = cfg(); if (c) putCfg(Object.assign(c, { fails: 0, until: 0 })); closeOverlay(); return; } if (!silent) say('Biometric check failed. Use your passcode.', true); }
-    catch (e) { if (!silent) say('Biometrics unavailable or cancelled. Use your passcode.', true); }
+    catch (e) { if (!silent) { const reason=e&&e.name==='NotAllowedError'?'Device authentication was cancelled or not accepted.':e&&e.name==='NotSupportedError'?'This device does not support biometric unlock.':e&&e.name==='SecurityError'?'Biometric unlock requires a secure connection.':'Biometric unlock is unavailable right now.'; say(`${reason} Use your passcode.`, true); } }
     busy = false;
   }
 

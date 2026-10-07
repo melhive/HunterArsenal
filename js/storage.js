@@ -33,14 +33,14 @@
   function defaults() {
     const now = Date.now(), today = G.todayKey();
     return {
-      v: 3,
+      v: 4,
       profile: { name: 'Hunter', avatar: null, hunterId: makeHunterId(), createdAt: now, equippedTitle: null, birthdate: '', lifespan: 80 },
-      settings: { theme: 'default', sound: false, penalties: false },
+      settings: { theme: 'default', sound: false, penalties: true, autoFreeze: true, shopTab: 'Display Modes', border: 'none', namePlate: 'none' },
       habits: [], skills: [], skillLog: [], completions: {}, days: {},
       streak: { combo: 0, best: 0, freezes: 0, processed: G.addDays(today, -1) },
       unlocked: { achievements: {}, titles: {}, challenges: {} },
       purchases: [], dailyQuest: { state: 'none', at: null, day: null, completed: 0, repeat: null },
-      meta: { lastSeenVersion: null, onboarded: false }
+      meta: { lastSeenVersion: null, onboarded: false, rulesSeen: false, rulesVersion: null }
     };
   }
 
@@ -56,7 +56,12 @@
     out.profile.birthdate = DATE_RE.test(p.birthdate || '') ? p.birthdate : '';
     out.profile.lifespan = Math.round(clamp(p.lifespan, 30, 120, 80));
     out.settings.theme = G.THEMES.some(t => t.id === s.theme) ? s.theme : 'default';
-    out.settings.sound = s.sound === true; out.settings.penalties = s.penalties === true;
+    out.settings.sound = s.sound === true;
+    out.settings.penalties = Number(r.v) >= 4 ? s.penalties !== false : true;
+    out.settings.autoFreeze = s.autoFreeze !== false;
+    out.settings.shopTab = ['Display Modes', 'Photo Borders', 'Name Plates'].includes(s.shopTab) ? s.shopTab : 'Display Modes';
+    out.settings.border = G.COSMETICS.some(c => c.type === 'border' && c.id === s.border) ? s.border : 'none';
+    out.settings.namePlate = G.COSMETICS.some(c => c.type === 'plate' && c.id === s.namePlate) ? s.namePlate : 'none';
 
     const seen = new Set();
     out.habits = arr(r.habits).slice(0, 200).map(h => {
@@ -96,20 +101,23 @@
     const days = obj(r.days);
     for (const d of Object.keys(days)) {
       if (!DATE_RE.test(d)) continue; const x = obj(days[d]);
-      out.days[d] = { sched: Math.round(clamp(x.sched, 0, 200, 0)), done: Math.round(clamp(x.done, 0, 200, 0)), perfect: x.perfect === true, penalty: Math.round(clamp(x.penalty, 0, 100, 0)), dq: x.dq > 0 ? G.CONST.DAILY_QUEST_BONUS : 0, frozen: x.frozen === true };
+      out.days[d] = { sched: Math.round(clamp(x.sched, 0, 200, 0)), done: Math.round(clamp(x.done, 0, 200, 0)), perfect: x.perfect === true, penalty: Math.round(clamp(x.penalty, 0, 100000, 0)), habitPenalty: Math.round(clamp(x.habitPenalty, 0, 100000, 0)), dqPenalty: Math.round(clamp(x.dqPenalty, 0, 1000, 0)), dq: x.dq > 0 ? G.CONST.DAILY_QUEST_BONUS : 0, frozen: x.frozen === true, restDay: x.restDay === true };
     }
     const st = obj(r.streak);
-    out.streak = { combo: Math.round(clamp(st.combo, 0, 5000, 0)), best: Math.round(clamp(st.best, 0, 5000, 0)), freezes: Math.round(clamp(st.freezes, 0, G.CONST.FREEZE_CAP, 0)), processed: DATE_RE.test(st.processed || '') ? st.processed : base.streak.processed };
+    const legacyBest = Math.round(clamp(st.best, 0, 5000, 0));
+    const freezeMilestones = arr(st.milestones).map(Number).filter(n => [3, 7, 30].includes(n));
+    if (Number(r.v) < 4) [3, 7, 30].forEach(n => { if (Math.round(clamp(st.combo, 0, 5000, 0)) >= n && !freezeMilestones.includes(n)) freezeMilestones.push(n); });
+    out.streak = { combo: Math.round(clamp(st.combo, 0, 5000, 0)), best: legacyBest, freezes: Math.round(clamp(st.freezes, 0, G.CONST.FREEZE_CAP, 0)), milestones: freezeMilestones, processed: DATE_RE.test(st.processed || '') ? st.processed : base.streak.processed };
     if (out.streak.processed > G.todayKey()) out.streak.processed = G.addDays(G.todayKey(), -1);
     const un = obj(r.unlocked);
     G.ACHIEVEMENTS.forEach(a => { const t = obj(un.achievements)[a.id]; if (t) out.unlocked.achievements[a.id] = clamp(t, 0, 4e12, Date.now()); });
     G.TITLES.forEach(a => { const t = obj(un.titles)[a.id]; if (t) out.unlocked.titles[a.id] = clamp(t, 0, 4e12, Date.now()); });
     G.CHALLENGES.forEach(a => { const t = obj(un.challenges)[a.id]; if (t) out.unlocked.challenges[a.id] = clamp(t, 0, 4e12, Date.now()); });
-    out.purchases = arr(r.purchases).slice(0, 50).map(p => { p = obj(p); const th = G.THEMES.find(t => t.id === p.id); return th && th.unlock.type === 'hc' ? { id: th.id, cost: th.unlock.value, at: clamp(p.at, 0, 4e12, 0) } : null; }).filter(Boolean);
+    out.purchases = arr(r.purchases).slice(0, 100).map(p => { p = obj(p); const th = G.THEMES.find(t => t.id === p.id), cosmetic = G.COSMETICS.find(c => c.id === p.id); if (th && th.unlock.type === 'hc') return { id: th.id, cost: th.unlock.value, at: clamp(p.at, 0, 4e12, 0) }; if (cosmetic) return { id: cosmetic.id, cost: cosmetic.cost, at: clamp(p.at, 0, 4e12, 0) }; return null; }).filter(Boolean);
     const dq = obj(r.dailyQuest), states = ['none', 'scheduled', 'available', 'accepted', 'completed', 'failed', 'declined'];
     out.dailyQuest = { state: states.includes(dq.state) ? dq.state : 'none', at: dq.at ? clamp(dq.at, 0, 4e12, null) : null, day: DATE_RE.test(dq.day || '') ? dq.day : null, completed: Math.round(clamp(dq.completed, 0, 100000, 0)), repeat: /^([01]\d|2[0-3]):[0-5]\d$/.test(dq.repeat || '') ? dq.repeat : null };
     const m = obj(r.meta);
-    out.meta = { lastSeenVersion: str(m.lastSeenVersion, 16, '') || null, onboarded: m.onboarded === true };
+    out.meta = { lastSeenVersion: str(m.lastSeenVersion, 16, '') || null, onboarded: m.onboarded === true, rulesSeen: m.rulesSeen === true, rulesVersion: str(m.rulesVersion, 16, '') || null };
     return out;
   }
 
@@ -117,7 +125,7 @@
     try {
       let raw = g.localStorage.getItem(KEY), migrated = false;
       for (let i = 0; !raw && i < LEGACY_KEYS.length; i++) { raw = g.localStorage.getItem(LEGACY_KEYS[i]); migrated = !!raw; }
-      if (raw) { const S = sanitize(JSON.parse(raw)); if (migrated) save(S); return S; }
+      if (raw) { const parsed = JSON.parse(raw), oldVersion = Number(parsed && parsed.v) < 4, S = sanitize(parsed); if (migrated || oldVersion) save(S); return S; }
     } catch (e) { console.warn('HunterArsenal: could not read saved data, starting fresh.', e); }
     return defaults();
   }

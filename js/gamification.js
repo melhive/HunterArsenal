@@ -15,9 +15,10 @@
     LEVEL_ANCHORS: [[1, 0], [13, 1500], [30, 6000], [50, 14000], [70, 25000], [90, 38000], [100, 48000]],
     ATTR_TIER_STARTS: [0, 100, 400, 900, 1600],               // attribute XP where tiers I..V begin
     MASTERY_STARTS: [0, 50, 150, 400, 700, 1000, 2500],        // Awakened..Ascendant (Elite value is provisional)
-    FREEZE_EVERY: 7, FREEZE_CAP: 3,
-    PENALTY_PER_MISS: 5, PENALTY_DAY_CAP: 15,                  // optional, Hunter XP only
-    DAILY_QUEST_BONUS: 25, DAILY_QUEST_FAIL_PENALTY: 10,       // Hunter XP only
+    FREEZE_CAP: 10,
+    FREEZE_MILESTONES: [[3, 1], [7, 2], [30, 5]], FREEZE_EVERY: 30, FREEZE_EVERY_REWARD: 5,
+    PENALTY_PER_MISS: 2, DAILY_QUEST_BONUS: 25,
+    DAILY_QUEST_FAIL_PENALTY: 20, DAILY_QUEST_DECLINE_PENALTY: 10,
     DAILY_QUEST_REOPEN_DELAY_MS: 2000,                         // missed-schedule popup delay (spec: ~2s)
     PRACTICE_XP: 5, PRACTICE_PER_DAY: 3,
     VERSATILE_MIN_XP: 100,                                     // top attribute must have reached tier II
@@ -48,7 +49,8 @@
   };
   const TIER_ROMAN = ['I', 'II', 'III', 'IV', 'V'];
 
-  const MASTERY = ['INITIATED', 'CALIBRATED', 'PROFICIENT', 'QUALIFIED', 'ADVANCED', 'EXPERT', 'AUTHORITY'];
+  const MASTERY = ['Awakened', 'Forged', 'Hunter', 'Veteran', 'Elite', 'Apex', 'Ascendant'];
+  const LEGACY_MASTERY = Object.freeze({ INITIATED:'Awakened', CALIBRATED:'Forged', PROFICIENT:'Hunter', QUALIFIED:'Veteran', ADVANCED:'Elite', EXPERT:'Apex', AUTHORITY:'Ascendant' });
 
   /* ------------------------------------------------------------ dates */
   const pad = n => String(n).padStart(2, '0');
@@ -178,25 +180,44 @@
     let d = addDays(S.streak.processed, 1), changed = false;
     const events = [];
     while (d < today) {
-      const r = S.days[d];
       const sched = scheduledHabits(S, d).length;
       const dq = S.dailyQuest;
-      if (r && r.perfect) {
-        S.streak.combo++;
-        S.streak.best = Math.max(S.streak.best, S.streak.combo);
-        if (S.streak.combo % CONST.FREEZE_EVERY === 0 && S.streak.freezes < CONST.FREEZE_CAP) { S.streak.freezes++; events.push({ type: 'freeze', d }); }
-      } else if (sched > 0) {
-        const missed = sched - (r ? r.done : 0);
-        const rec = dayRec(S, d);
-        if (S.streak.freezes > 0) { S.streak.freezes--; rec.frozen = true; events.push({ type: 'frozen', d }); }
-        else {
+      if (!S.days[d]) refreshDay(S, d); // derive missing records from the canonical completion log
+      const rec = dayRec(S, d);
+      if (sched > 0 && !rec.perfect && !rec.restDay) {
+        const missed = Math.max(0, sched - (rec.done || 0));
+        if (S.settings.autoFreeze !== false && S.streak.freezes > 0) {
+          S.streak.freezes--; rec.frozen = true; events.push({ type: 'frozen', d });
+        } else {
           if (S.streak.combo > 0) events.push({ type: 'comboLost', d, combo: S.streak.combo });
           S.streak.combo = 0;
-          if (S.settings.penalties) { rec.penalty = Math.min(CONST.PENALTY_DAY_CAP, missed * CONST.PENALTY_PER_MISS); events.push({ type: 'penalty', d, xp: rec.penalty }); }
+          S.streak.milestones = [];
+          if (S.settings.penalties) {
+            const amount = missed * CONST.PENALTY_PER_MISS;
+            rec.penalty = Math.max(0, (rec.penalty || 0) - (rec.habitPenalty || 0)) + amount;
+            rec.habitPenalty = amount;
+            if (amount) events.push({ type: 'penalty', d, xp: amount });
+          }
         }
       }
-      if (dq.state === 'accepted' && dq.day <= d) {
-        dq.state = 'failed'; dayRec(S, d).penalty = (S.days[d].penalty || 0) + CONST.DAILY_QUEST_FAIL_PENALTY; events.push({ type: 'dqFailed', d });
+      if (dq.state === 'accepted' && dq.day && dq.day <= d) {
+        dq.state = 'failed'; const mr = dayRec(S, dq.day);
+        if (!mr.dqPenalty) { mr.dqPenalty = CONST.DAILY_QUEST_FAIL_PENALTY; mr.penalty = (mr.penalty || 0) + mr.dqPenalty; }
+        events.push({ type: 'dqFailed', d: dq.day });
+      } else if (dq.state === 'available' && dq.day && dq.day <= d) {
+        dq.state = 'declined'; const mr = dayRec(S, dq.day);
+        if (!mr.dqPenalty) { mr.dqPenalty = CONST.DAILY_QUEST_DECLINE_PENALTY; mr.penalty = (mr.penalty || 0) + mr.dqPenalty; }
+        events.push({ type: 'dqExpired', d: dq.day });
+      }
+      if (rec.restDay || rec.frozen) { /* preserved Streak day; counter does not advance */ }
+      else if (rec.perfect) {
+        S.streak.combo++; S.streak.best = Math.max(S.streak.best, S.streak.combo);
+        const once = CONST.FREEZE_MILESTONES.reduce((n, [m, reward]) => n + (m === S.streak.combo && !(S.streak.milestones || []).includes(m) ? reward : 0), 0);
+        S.streak.milestones = S.streak.milestones || [];
+        CONST.FREEZE_MILESTONES.forEach(([m]) => { if (m === S.streak.combo && !S.streak.milestones.includes(m)) S.streak.milestones.push(m); });
+        const repeat = S.streak.combo > 30 && S.streak.combo % CONST.FREEZE_EVERY === 0 ? CONST.FREEZE_EVERY_REWARD : 0;
+        const awarded = Math.min(CONST.FREEZE_CAP - S.streak.freezes, once + repeat);
+        if (awarded > 0) { S.streak.freezes += awarded; events.push({ type: 'freeze', d, amount: awarded }); }
       }
       S.streak.processed = d; d = addDays(d, 1); changed = true;
     }
@@ -250,13 +271,30 @@
   }
   function dqTick(S, now) {
     const dq = S.dailyQuest, todayK = keyOf(new Date(now));
-    // re-arm after a finished cycle. A cleared mission waits for the day to end first, so un-ticking a protocol can still revert it.
+    // re-arm after a finished cycle. A cleared mission waits for the day to end first, so un-ticking a habit can still revert it.
     if (dq.repeat && (dq.state === 'none' || dq.state === 'failed' || dq.state === 'declined' || (dq.state === 'completed' && dq.day && dq.day < todayK))) dqSchedule(S, dqNextAt(dq.repeat, now));
-    if (dq.state === 'scheduled' && dq.at && now >= dq.at) { dq.state = 'available'; return true; }
+    if (dq.state === 'scheduled' && dq.at && now >= dq.at) {
+      if (S.days[todayK] && S.days[todayK].restDay) { dq.state = 'none'; dq.at = null; return false; }
+      dq.state = 'available'; dq.day = todayK; return true;
+    }
     return false;
   }
   function dqAccept(S, d) { S.dailyQuest.state = 'accepted'; S.dailyQuest.day = d; }
-  function dqDecline(S) { S.dailyQuest.state = 'declined'; }
+  function dqDecline(S) {
+    const dq = S.dailyQuest, d = dq.day || todayKey(); dq.state = 'declined';
+    if (!dq._penalized) {
+      const rec = dayRec(S, d); rec.dqPenalty = CONST.DAILY_QUEST_DECLINE_PENALTY;
+      rec.penalty = (rec.penalty || 0) + rec.dqPenalty; dq._penalized = true;
+    }
+  }
+  function declareRestDay(S, d) {
+    const rec = dayRec(S, d);
+    if (rec.restDay) return false;
+    if (S.streak.freezes < 1) return false;
+    S.streak.freezes--; rec.restDay = true; rec.frozen = true;
+    if (S.dailyQuest.state === 'scheduled' && S.dailyQuest.day === d) { S.dailyQuest.state = 'none'; S.dailyQuest.at = null; }
+    return true;
+  }
 
   /* ------------------------------------------------------------ context for unlock rules */
   function context(S, today) {
@@ -294,14 +332,14 @@
   /* ------------------------------------------------------------ definitions: achievements, titles, challenges */
   const A = (id, name, desc, icon, tone, reward, target, progress, hidden) => ({ id, name, desc, icon, tone, reward, target, progress, hidden: !!hidden });
   const ACHIEVEMENTS = [
-    A('first_step', 'FIRST ENTRY', 'Log your first protocol.', 'star', '#b99a5c', 25, 1, c => c.completions),
-    A('streak3', '3-DAY CONTINUITY', 'Maintain 3 consecutive perfect days.', 'calendar', '#3ab0c2', 30, 3, c => c.bestCombo),
-    A('streak7', '7-DAY CONTINUITY', 'Maintain 7 consecutive days.', 'calendar', '#3ab0c2', 50, 7, c => c.bestCombo),
-    A('streak14', '14-DAY CONTINUITY', 'Maintain 14 consecutive days.', 'flame', '#b98a50', 100, 14, c => c.bestCombo),
-    A('streak30', '30-DAY CONTINUITY', 'Maintain 30 consecutive days.', 'flame', '#b5575f', 250, 30, c => c.bestCombo),
+    A('first_step', 'FIRST ENTRY', 'Log your first habit.', 'star', '#b99a5c', 25, 1, c => c.completions),
+    A('streak3', '3-DAY Streak', 'Maintain 3 consecutive perfect days.', 'calendar', '#3ab0c2', 30, 3, c => c.bestCombo),
+    A('streak7', '7-DAY Streak', 'Maintain 7 consecutive days.', 'calendar', '#3ab0c2', 50, 7, c => c.bestCombo),
+    A('streak14', '14-DAY Streak', 'Maintain 14 consecutive days.', 'flame', '#b98a50', 100, 14, c => c.bestCombo),
+    A('streak30', '30-DAY Streak', 'Maintain 30 consecutive days.', 'flame', '#b5575f', 250, 30, c => c.bestCombo),
     A('check100', '100 ENTRIES', 'Reach 100 total check-ins.', 'target', '#8b7db3', 100, 100, c => c.completions),
     A('check500', '500 ENTRIES', 'Reach 500 total check-ins.', 'target', '#8b7db3', 250, 500, c => c.completions),
-    A('perfect1', 'CLEAN DAY', 'Clear every scheduled protocol in one day.', 'check', '#5f9e7e', 40, 1, c => c.perfectDays),
+    A('perfect1', 'CLEAN DAY', 'Clear every scheduled habit in one day.', 'check', '#5f9e7e', 40, 1, c => c.perfectDays),
     A('perfect10', 'FIELD DISCIPLINE', 'Earn 10 perfect days.', 'moon', '#b5575f', 100, 10, c => c.perfectDays),
     A('lvl10', 'FIELD READY', 'Reach level 10.', 'arrowup', '#3ab0c2', 75, 10, c => c.level),
     A('lvl25', 'SENIOR STATUS', 'Reach level 25.', 'arrowup', '#3ab0c2', 150, 25, c => c.level),
@@ -309,35 +347,35 @@
     A('rank_d', 'PROMOTION: D-RANK', 'Reach D-Rank.', 'arrowup', '#6fa58a', 100, 1, c => c.rankIdx),
     A('rank_c', 'PROMOTION: C-RANK', 'Reach C-Rank.', 'arrowup', '#43a8ba', 200, 2, c => c.rankIdx),
     A('rank_b', 'PROMOTION: B-RANK', 'Reach B-Rank.', 'arrowup', '#8a86b8', 300, 3, c => c.rankIdx),
-    A('forged', 'PROTOCOL CALIBRATED', 'Reach CALIBRATED in any protocol.', 'dumbbell', '#3ab0c2', 75, 1, c => c.masteryMax),
-    A('veteran', 'PROTOCOL QUALIFIED', 'Reach QUALIFIED in any protocol.', 'dumbbell', '#8a86b8', 150, 3, c => c.masteryMax),
+    A('forged', 'HABIT FORGED', 'Reach Forged in any habit.', 'dumbbell', '#3ab0c2', 75, 1, c => c.masteryMax),
+    A('veteran', 'HABIT VETERAN', 'Reach Veteran in any habit.', 'dumbbell', '#8a86b8', 150, 3, c => c.masteryMax),
     A('balanced', 'BALANCED PROFILE', `Bring all five attributes to ${CONST.ATTR_TIER_STARTS[1]} XP.`, 'people', '#b99a5c', 100, 5, c => c.attrsPast1),
     A('specialist', 'SPECIALIST', 'Reach class tier III in any attribute.', 'fist', '#b5575f', 150, 2, c => c.maxAttrIdx),
-    A('arsenal5', 'PROTOCOL SUITE', 'Keep 5 active protocols.', 'list', '#3ab0c2', 25, 5, c => c.activeHabits),
+    A('arsenal5', 'HABIT SUITE', 'Keep 5 active habits.', 'list', '#3ab0c2', 25, 5, c => c.activeHabits),
     A('skilled', 'FIRST SKILL', 'Add your first skill.', 'book', '#5f9e7e', 25, 1, c => c.skills),
     A('dq1', 'MISSION COMPLETE', 'Clear your first Daily Mission.', 'bolt', '#3ab0c2', 60, 1, c => c.dqDone),
-    A('earlybird', 'EARLY START', 'Complete a protocol before 6 AM.', 'sun', '#c0a263', 40, 1, c => c.early, true),
-    A('ascendant', 'AUTHORITY', 'Reach AUTHORITY in any protocol.', 'crown', '#b0586c', 500, 6, c => c.masteryMax, true),
+    A('earlybird', 'EARLY START', 'Complete a habit before 6 AM.', 'sun', '#c0a263', 40, 1, c => c.early, true),
+    A('ascendant', 'ASCENDANT', 'Reach Ascendant in any habit.', 'crown', '#b0586c', 500, 6, c => c.masteryMax, true),
     A('lvl100', 'MAXIMUM CLEARANCE', 'Reach level 100.', 'crown', '#b0586c', 1000, 100, c => c.level, true)
   ];
 
   const T = (id, cat, name, desc, icon, target, progress) => ({ id, cat, name, desc, icon, target, progress });
   const attrTitle = (id, name, desc, a) => T(id, 'Attribute', name, desc, ATTRS[a].icon, CONST.ATTR_TIER_STARTS[1], c => c.attrXp[a]);
   const TITLES = [
-    T('first', 'Milestone', 'Day One', 'Log your first protocol.', 'flame', 1, c => c.completions),
+    T('first', 'Milestone', 'Day One', 'Log your first habit.', 'flame', 1, c => c.completions),
     T('committed', 'Milestone', 'Committed', 'Reach 50 check-ins.', 'target', 50, c => c.completions),
     T('centurion', 'Milestone', 'Centurion', 'Reach 100 check-ins.', 'target', 100, c => c.completions),
     T('relentless', 'Milestone', 'Relentless', 'Reach 500 check-ins.', 'target', 500, c => c.completions),
     T('thousand', 'Milestone', 'Long Service', 'Reach 1,000 check-ins.', 'target', 1000, c => c.completions),
     T('flawless', 'Milestone', 'Flawless', 'Earn your first perfect day.', 'check', 1, c => c.perfectDays),
-    T('ironwill', 'Continuity', 'Steady', 'Reach a 3-day continuity.', 'flame', 3, c => c.bestCombo),
-    T('weekwarrior', 'Continuity', 'Sustained', 'Reach a 7-day continuity.', 'flame', 7, c => c.bestCombo),
-    T('fortnight', 'Continuity', 'Consistent', 'Reach a 14-day continuity.', 'flame', 14, c => c.bestCombo),
-    T('unbreakable', 'Continuity', 'Unbroken', 'Reach a 30-day continuity.', 'flame', 30, c => c.bestCombo),
-    T('forgedfire', 'Mastery', 'Calibrated', 'Reach CALIBRATED in any protocol.', 'dumbbell', 1, c => c.masteryMax),
-    T('seasoned', 'Mastery', 'Qualified Hunter', 'Reach QUALIFIED in any protocol.', 'dumbbell', 3, c => c.masteryMax),
-    T('eliteop', 'Mastery', 'Advanced Hunter', 'Reach ADVANCED in any protocol.', 'dumbbell', 4, c => c.masteryMax),
-    T('ascendant', 'Mastery', 'Authority', 'Reach AUTHORITY in any protocol.', 'crown', 6, c => c.masteryMax),
+    T('ironwill', 'Streak', 'Steady', 'Reach a 3-day Streak.', 'flame', 3, c => c.bestCombo),
+    T('weekwarrior', 'Streak', 'Sustained', 'Reach a 7-day Streak.', 'flame', 7, c => c.bestCombo),
+    T('fortnight', 'Streak', 'Consistent', 'Reach a 14-day Streak.', 'flame', 14, c => c.bestCombo),
+    T('unbreakable', 'Streak', 'Unbroken', 'Reach a 30-day Streak.', 'flame', 30, c => c.bestCombo),
+    T('forgedfire', 'Mastery', 'Forged', 'Reach Forged in any habit.', 'dumbbell', 1, c => c.masteryMax),
+    T('seasoned', 'Mastery', 'Veteran Hunter', 'Reach Veteran in any habit.', 'dumbbell', 3, c => c.masteryMax),
+    T('eliteop', 'Mastery', 'Elite Hunter', 'Reach Elite in any habit.', 'dumbbell', 4, c => c.masteryMax),
+    T('ascendant', 'Mastery', 'Ascendant', 'Reach Ascendant in any habit.', 'crown', 6, c => c.masteryMax),
     attrTitle('ironbody', 'Conditioned', `Reach ${CONST.ATTR_TIER_STARTS[1]} Strength XP.`, 'STR'),
     attrTitle('resilient', 'Resilient', `Reach ${CONST.ATTR_TIER_STARTS[1]} Vitality XP.`, 'VIT'),
     attrTitle('scholar', 'Analyst', `Reach ${CONST.ATTR_TIER_STARTS[1]} Intellect XP.`, 'INT'),
@@ -353,16 +391,16 @@
     T('collector', 'Special', 'Archivist', 'Unlock 10 qualifications.', 'trophy', 10, c => c.achievements),
     T('apex', 'Level 100', 'Apex Hunter', 'Reach level 100.', 'crown', 100, c => c.level)
   ];
-  const TITLE_CATS = ['Milestone', 'Continuity', 'Mastery', 'Attribute', 'Hunter Rank', 'Special', 'Level 100'];
+  const TITLE_CATS = ['Milestone', 'Streak', 'Mastery', 'Attribute', 'Hunter Rank', 'Special', 'Level 100'];
 
   const C = (id, name, desc, icon, tone, reward, target, progress) => ({ id, name, desc, icon, tone, reward, target, progress });
   const CHALLENGES = [
     C('warmup', 'Warm-Up', 'Complete 25 check-ins.', 'target', '#3ab0c2', 40, 25, c => c.completions),
-    C('ironweek', 'Seven-Day Run', 'Reach a 7-day continuity.', 'flame', '#b98a50', 60, 7, c => c.bestCombo),
+    C('ironweek', 'Seven-Day Run', 'Reach a 7-day Streak.', 'flame', '#b98a50', 60, 7, c => c.bestCombo),
     C('perfect5', 'Five Clean Days', 'Earn 5 perfect days.', 'check', '#5f9e7e', 75, 5, c => c.perfectDays),
     C('hundred', 'Hundred Entries', 'Complete 100 check-ins.', 'swords', '#b5575f', 120, 100, c => c.completions),
-    C('cyber', 'Cognitive Operation', 'Complete 30 INT protocols.', 'book', '#8b7db3', 100, 30, c => c.attrDone.INT),
-    C('bodyforge', 'Physical Conditioning', 'Complete 30 STR protocols.', 'dumbbell', '#b5575f', 100, 30, c => c.attrDone.STR),
+    C('cyber', 'Cognitive Operation', 'Complete 30 INT habits.', 'book', '#8b7db3', 100, 30, c => c.attrDone.INT),
+    C('bodyforge', 'Physical Conditioning', 'Complete 30 STR habits.', 'dumbbell', '#b5575f', 100, 30, c => c.attrDone.STR),
     C('practice', 'Deliberate Practice', 'Log 20 skill sessions.', 'bolt', '#b99a5c', 60, 20, c => c.sessions),
     C('questtaker', 'Mission Run', 'Clear 3 Daily Missions.', 'trophy', '#3ab0c2', 90, 3, c => c.dqDone)
   ];
@@ -375,7 +413,14 @@
     { id: 'cyber', name: 'Violet Signal', desc: 'Violet accent for analyst-style review.', unlock: { type: 'challenge', value: 'cyber', label: 'Complete the Cognitive Operation' }, accent: '#8b7db3', edge: '#4a4470', hue: 70 },
     { id: 'minimal', name: 'Redacted Mono', desc: 'Monochrome steel with no color accent.', unlock: { type: 'hc', value: 350 }, accent: '#c4ccd6', edge: '#566069', hue: 0, sat: 0.15 },
     { id: 'royal', name: 'Brass', desc: 'Brushed-brass accent.', unlock: { type: 'level', value: 50, label: 'Reach Level 50' }, accent: '#c0a263', edge: '#6e5a30', hue: 190 },
-    { id: 'galaxy', name: 'Deep Indigo', desc: 'Indigo accent for low-light use.', unlock: { type: 'streak', value: 30, label: 'Reach a 30-day continuity record' }, accent: '#7c78b0', edge: '#403d70', hue: 40 }
+    { id: 'galaxy', name: 'Deep Indigo', desc: 'Indigo accent for low-light use.', unlock: { type: 'streak', value: 30, label: 'Reach a 30-day Streak record' }, accent: '#7c78b0', edge: '#403d70', hue: 40 }
+  ];
+  const COSMETICS = [
+    { id: 'border-bronze', type: 'border', name: 'Bronze Photo Border', cost: 100, color: '#b98a50' },
+    { id: 'border-cyan', type: 'border', name: 'Signal Photo Border', cost: 180, color: '#3ab0c2' },
+    { id: 'border-violet', type: 'border', name: 'Violet Photo Border', cost: 250, color: '#8b7db3' },
+    { id: 'plate-field', type: 'plate', name: 'Field Name Plate', cost: 120, color: '#5f9e7e' },
+    { id: 'plate-elite', type: 'plate', name: 'Elite Name Plate', cost: 240, color: '#c0a263' }
   ];
 
   /* ------------------------------------------------------------ unlocks, HC */
@@ -422,7 +467,7 @@
     ATTR_ORDER.forEach(a => { const t = attrTier(a, ctx.attrXp[a]); attributes[a] = { xp: ctx.attrXp[a], tier: t.name, tierNo: t.no, pct: t.pct, next: t.next, max: t.max }; });
     return {
       name: S.profile.name, hunterId: S.profile.hunterId, issuedDate: keyOf(new Date(S.profile.createdAt)),
-      avatar: S.profile.avatar, level: li.level, xp: li.cur, xpNeed: li.need, xpPct: li.pct, maxLevel: li.max,
+      avatar: S.profile.avatar, photoBorder: S.settings.border, namePlate: S.settings.namePlate, level: li.level, xp: li.cur, xpNeed: li.need, xpPct: li.pct, maxLevel: li.max,
       rank: rank.id, rankColor: rank.color, rankTitle: rank.title,
       class: cls.name, primaryAttribute: cls.attr, versatile: cls.versatile,
       title: title ? title.name : null, attributes,
@@ -431,9 +476,9 @@
   }
 
   HA.Game = {
-    CONST, RANKS, ATTRS, ATTR_ORDER, TIER_ROMAN, MASTERY, ACHIEVEMENTS, TITLES, TITLE_CATS, CHALLENGES, THEMES,
+    CONST, RANKS, ATTRS, ATTR_ORDER, TIER_ROMAN, MASTERY, LEGACY_MASTERY, ACHIEVEMENTS, TITLES, TITLE_CATS, CHALLENGES, THEMES, COSMETICS,
     keyOf, parseKey, addDays, todayKey, levelNeed, LEVEL_START, levelInfo, rankForLevel, rankStartXP, rankProgress, tierProgress, attrTier, masteryTier, classInfo,
     activeHabits, habitScheduledOn, scheduledHabits, dayRec, totalXP, attrXP, masteryXPMap, habitStats, refreshDay, processDays, toggleHabit,
-    skillXP, practiceSkill, dqCanSchedule, dqSchedule, dqSetRepeat, dqStopRepeat, dqNextAt, TIME_RE, dqTick, dqAccept, dqDecline, context, checkUnlocks, hcBalance, themeStatus, getHunterCardData
+    skillXP, practiceSkill, dqCanSchedule, dqSchedule, dqSetRepeat, dqStopRepeat, dqNextAt, TIME_RE, dqTick, dqAccept, dqDecline, declareRestDay, context, checkUnlocks, hcBalance, themeStatus, getHunterCardData
   };
 })(typeof self !== 'undefined' ? self : window);

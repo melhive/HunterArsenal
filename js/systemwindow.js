@@ -16,7 +16,8 @@
     const tone = n.tone || 'var(--accent)';
     el.innerHTML = `
       <div class="nw-backdrop" data-nw="backdrop">
-        <div class="nw" role="alertdialog" aria-modal="true" aria-labelledby="nw-title" style="--tone:${tone}">
+        <div class="nw ${n.systemAlert ? 'system-alert' : ''}" role="alertdialog" aria-modal="true" aria-labelledby="nw-title" style="--tone:${tone}">
+          ${n.systemAlert ? '<div class="system-alert-mark" aria-hidden="true">!</div>' : ''}
           <img class="nw-logo" src="${LOGO}" data-fallback="${LOGO_FALLBACK}" alt="">
           <div class="nw-frame"><div class="nw-body">
             <div class="nw-eyebrow"><i></i><span>${n.eyebrow || 'SYSTEM NOTICE'}</span><i></i></div>
