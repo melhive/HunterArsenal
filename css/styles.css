@@ -156,7 +156,7 @@ button.pill { cursor: pointer; }
 
 /* ---------- reward toast ---------- */
 .rtoast { position: fixed; left: 50%; bottom: calc(5.2rem + var(--safe-bottom)); transform: translateX(-50%); width: min(92vw, 21rem); padding: .55rem .7rem; border-radius: .6rem; background: rgba(22, 26, 31, .97); border: .07rem solid var(--ac, var(--accent)); box-shadow: 0 0 1rem color-mix(in srgb, var(--ac, color-mix(in srgb, var(--accent) 32%, transparent)) 45%, transparent); animation: toast 2.6s forwards; z-index: 90; }
-.rt-h { display: flex; align-items: center; gap: .4rem; font-size: .7rem; } .rt-h .ico { color: #5f9e7e; font-size: 1rem; stroke-width: 3; } .rt-h b { letter-spacing: .1em; font-size: .72rem; color: #e6ebf0; } .rt-h span { margin-left: auto; color: #b4bdc8; max-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rt-h { display: flex; align-items: center; gap: .4rem; font-size: .7rem; } .rt-h .ico { color: #5f9e7e; font-size: 1rem; stroke-width: 3; } .rt-h b { font: 700 .72rem/normal var(--font-ui); letter-spacing: .1em; color: #e6ebf0; } .rt-h span { margin-left: auto; color: #b4bdc8; max-width: 8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rt-r { display: flex; justify-content: space-between; gap: .4rem; margin-top: .3rem; font: 700 .72rem var(--font-ui); color: #6fae8a; }
 
 /* ---------- lists & rows ---------- */
@@ -443,7 +443,7 @@ html.is-locked, html.is-locked body { overflow: hidden; }
 /* ================= v2.3.0: layout fixes, Settings, motion ================= */
 /* larger Today / Habits / Skills / Records tabs */
 .tabs { margin: .55rem .5rem 0; }
-.tabs .body { height: 2.7rem; }
+.tabs .body { height: 3.1rem; }
 .tab { font-size: .84rem; gap: .45rem; letter-spacing: .05em; }
 .tab .ico { font-size: 1.2rem; }
 
@@ -517,7 +517,6 @@ button, .btn, .tab, .setitem, .linkrow, .hubrow, .pill, .fchip, .seg button, .do
 .settings-page-head > div { flex:1; }
 .settings-page-head h1 { margin:0; }
 .settings-page-head .sub { margin:.15rem 0 0; }
-.help-shortcut { width:2rem; height:2rem; border:.07rem solid var(--accent); border-radius:50%; background:#14191f; color:var(--accent); font:700 1rem var(--font-ui); }
 .rules-first { width:calc(100% - 1rem); margin:.2rem .5rem .5rem; padding:.6rem .7rem; display:flex; align-items:center; gap:.65rem; border:.07rem solid #34434e; border-radius:.4rem; background:#151b21; text-align:left; color:#dfe5ec; }
 .rules-first > .ico:first-child { color:var(--accent); }
 .rules-first span { flex:1; }
@@ -560,3 +559,5 @@ button, .btn, .tab, .setitem, .linkrow, .hubrow, .pill, .fchip, .seg button, .do
 @keyframes alertGlitch { 0% { transform:translateX(-4px); text-shadow:3px 0 #c58790; } 45% { transform:translateX(3px); text-shadow:-3px 0 var(--accent); } 100% { transform:none; } }
 @keyframes missionIn { from { opacity:0; transform:translateX(-8px); } }
 @media (prefers-reduced-motion:reduce) { .system-alert-mark,.system-alert .nw-frame,.system-alert .nw-title,.mission-stagger li { animation:none !important; } }
+
+.tabs .tab { padding-top: .28rem; padding-bottom: .28rem; }

@@ -346,7 +346,7 @@ const SESSION_ID = Array.from(crypto.getRandomValues(new Uint8Array(2)), b => b.
 const phtClock = () => new Intl.DateTimeFormat('en-PH', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit', second: '2-digit' }).format(new Date()) + ' PHT';
 const rulesHomeCard = () => (S.meta.rulesSeen ? '' : `<button class="rules-first" data-act="rules">${ic('info')}<span><b>Hunter's Rules</b><small>Review how Core XP, missions and Streaks work</small></span>${ic('chev')}</button>`);
 function homeHTML() {
-  return `<div class="classbar"><span>HUNTER ID <b>${esc(S.profile.hunterId)}</b></span><span><b id="cb-clock">${phtClock()}</b></span></div>` + sysHeader() + `<button class="help-shortcut" data-act="rules" aria-label="Hunter's Rules">?</button>` + rulesHomeCard() + levelCardHTML() + attrChipsHTML() + todayQuestHTML() + tabsHTML() + `<div class="tabbody">${tabBody()}</div>` + lifeCardHTML() + '<div style="height:.8rem"></div>';
+  return `<div class="classbar"><span>HUNTER ID <b>${esc(S.profile.hunterId)}</b></span><span><b id="cb-clock">${phtClock()}</b></span></div>` + sysHeader() + rulesHomeCard() + levelCardHTML() + attrChipsHTML() + todayQuestHTML() + tabsHTML() + `<div class="tabbody">${tabBody()}</div>` + lifeCardHTML() + '<div style="height:.8rem"></div>';
 }
 
 /* ---------- history ---------- */
@@ -382,12 +382,12 @@ function statsHTML() {
   const labels = [0, 6, 12, 18, 24, 29].map(i => `<text x="${10 + i * bw}" y="88">${fmtDate(last[i], { month: 'numeric', day: 'numeric' })}</text>`).join('');
   const stat = (v, l) => panel('', `<div class="stat"><b>${v}</b><span>${l}</span></div>`);
   const habits = S.habits.filter(h => !h.archived);
-  const cx=150,cy=132,radius=92,scale=Math.max(G.CONST.ATTR_TIER_STARTS[4],Math.ceil(Math.max(...G.ATTR_ORDER.map(a=>c.attrXp[a]))/G.CONST.ATTR_TIER_STARTS[4])*G.CONST.ATTR_TIER_STARTS[4]), angles=G.ATTR_ORDER.map((_,i)=>-Math.PI/2+i*2*Math.PI/5);
-  const radarPoints=G.ATTR_ORDER.map((a,i)=>{const v=Math.max(0,Math.min(1,c.attrXp[a]/scale));return `${(cx+Math.cos(angles[i])*radius*v).toFixed(1)},${(cy+Math.sin(angles[i])*radius*v).toFixed(1)}`;}).join(' ');
+  const cx=150,cy=132,radius=92,scale=G.CONST.ATTR_TIER_STARTS[4],attrXp=G.attrXP(S),relative=G.normalizeAttrDistribution(attrXp),angles=G.ATTR_ORDER.map((_,i)=>-Math.PI/2+i*2*Math.PI/5);
+  const radarPoints=G.ATTR_ORDER.map((a,i)=>{const v=relative[a];return `${(cx+Math.cos(angles[i])*radius*v).toFixed(1)},${(cy+Math.sin(angles[i])*radius*v).toFixed(1)}`;}).join(' ');
   const radarGrid=[.25,.5,.75,1].map(k=>`<polygon points="${angles.map(a=>`${(cx+Math.cos(a)*radius*k).toFixed(1)},${(cy+Math.sin(a)*radius*k).toFixed(1)}`).join(' ')}"/>`).join('');
   const radarAxes=angles.map(a=>`<line x1="${cx}" y1="${cy}" x2="${cx+Math.cos(a)*radius}" y2="${cy+Math.sin(a)*radius}"/>`).join('');
-  const radarLabels=G.ATTR_ORDER.map((a,i)=>{const lx=cx+Math.cos(angles[i])*(radius+22),ly=cy+Math.sin(angles[i])*(radius+22);return `<text x="${lx}" y="${ly}" fill="${ac(a)}" text-anchor="middle">${a} ${fmt(c.attrXp[a])} XP</text>`;}).join('');
-  const radarMarks=G.ATTR_ORDER.map((a,i)=>{const v=Math.max(0,Math.min(1,c.attrXp[a]/scale));return `<circle cx="${cx+Math.cos(angles[i])*radius*v}" cy="${cy+Math.sin(angles[i])*radius*v}" r="4" fill="${ac(a)}"/>`;}).join('');
+  const radarLabels=G.ATTR_ORDER.map((a,i)=>{const lx=cx+Math.cos(angles[i])*(radius+22),ly=cy+Math.sin(angles[i])*(radius+22);return `<text x="${lx}" y="${ly}" fill="${ac(a)}" text-anchor="middle">${a} ${fmt(attrXp[a])} XP</text>`;}).join('');
+  const radarMarks=G.ATTR_ORDER.map((a,i)=>{const v=relative[a];return `<circle cx="${cx+Math.cos(angles[i])*radius*v}" cy="${cy+Math.sin(angles[i])*radius*v}" r="4" fill="${ac(a)}"/>`;}).join('');
   const radarSVG=`<svg class="radar" viewBox="0 0 300 264" role="img" aria-label="Attribute XP radar"><g class="radar-grid">${radarGrid}${radarAxes}</g><polygon class="radar-value" points="${radarPoints}"/>${radarMarks}${radarLabels}</svg>`;
   return `<div class="page"><div class="pagebg"></div><h1>Statistics</h1><p class="sub">Your performance over time</p>
     <div class="grid2">${stat(fmt(c.completions), 'Total check-ins')}${stat(fmt(c.xp), 'XP earned')}${stat(c.bestCombo, 'Best active Streak')}${stat(c.activeDays, 'Active days')}</div>
@@ -428,8 +428,8 @@ function settingsHTML() {
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone, ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
   const install = standalone ? '<div class="setrow"><div><b>Installed</b><small>Running as an app on this device</small></div><span class="chipstat completed">Installed</span></div>' : deferredPrompt ? item('download','Install App','Add HunterArsenal to your home screen','install') : `<div class="setrow"><div><b>Install App</b><small>${ios ? 'Tap Share, then Add to Home Screen' : 'Open the browser menu and choose Install app or Add to Home screen'}</small></div></div>`;
   const rows = [['user','Account','Profile, photo and personal information'],['scroll','Daily Mission','Schedule and mission timing'],['palette','Appearance','Display mode and sound'],['flame','Gameplay','Penalties and Streak Freeze'],['lock','Security','App Lock and encrypted backups'],['archive','Data & Sync','Backups, restore and sync status'],['info','About',`Version ${esc(appVersion)} and release notes`]];
-  if (!settingsSub) return `<div class="page"><div class="pagebg"></div><div class="settings-page-head"><div><h1>Settings</h1><p class="sub">Configure your arsenal</p></div><button class="help-shortcut" data-act="rules" aria-label="Hunter's Rules">?</button></div><div class="linkrows">${rows.map(([i,t,d])=>item(i,t,d,'settings-open',t)).join('')}</div></div>`;
-  const head = `<div class="settings-page-head">${back}<div><h1>${esc(settingsSub)}</h1><p class="sub">Settings · ${esc(settingsSub)}</p></div><button class="help-shortcut" data-act="rules" aria-label="Hunter's Rules">?</button></div>`;
+  if (!settingsSub) return `<div class="page"><div class="pagebg"></div><div class="settings-page-head"><div><h1>Settings</h1><p class="sub">Configure your arsenal</p></div></div><div class="linkrows">${rows.map(([i,t,d])=>item(i,t,d,'settings-open',t)).join('')}</div></div>`;
+  const head = `<div class="settings-page-head">${back}<div><h1>${esc(settingsSub)}</h1><p class="sub">Settings · ${esc(settingsSub)}</p></div></div>`;
   let body = '';
   if (settingsSub === 'Account') {
     const arch = S.habits.filter(h=>h.archived);
@@ -544,7 +544,7 @@ function announce(before, after, ev, fresh) {
 function rewardToast(h) {
   const old = $('#layer .rtoast'); if (old) old.remove();
   const el = document.createElement('div'); el.className = 'rtoast'; el.setAttribute('role', 'status'); el.style.setProperty('--ac', ac(h.attr));
-  el.innerHTML = `<div class="rt-h">${ic('check')}<b>habit COMPLETED</b><span>${esc(h.name)}</span></div><div class="rt-r"><span>+${G.CONST.HUNTER_XP} Core XP</span><span style="color:${ac(h.attr)}">+${G.CONST.ATTR_XP} ${h.attr} XP</span><span style="color:#8b7db3">+${G.CONST.MASTERY_XP} Mastery XP</span></div>`;
+  el.innerHTML = `<div class="rt-h">${ic('check')}<b>HABIT COMPLETED</b><span>${esc(h.name)}</span></div><div class="rt-r"><span>+${G.CONST.HUNTER_XP} Core XP</span><span style="color:${ac(h.attr)}">+${G.CONST.ATTR_XP} ${h.attr} XP</span><span style="color:#8b7db3">+${G.CONST.MASTERY_XP} Mastery XP</span></div>`;
   $('#layer').appendChild(el); setTimeout(() => el.remove(), 2600);
 }
 

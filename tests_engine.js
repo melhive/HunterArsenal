@@ -32,6 +32,7 @@ assert(Object.keys(G.LEGACY_MASTERY).length===7 && Object.values(G.LEGACY_MASTER
 { const S = Store.defaults(); const d = '2026-02-01'; S.habits.push(mk('a', 'STR', d)); S.streak.processed = '2026-01-31';
   const r = G.toggleHabit(S, 'a', d, 1); G.refreshDay(S, d);
   assert(r.xp === 10 && G.totalXP(S) === 10 && G.attrXP(S).STR === 5 && G.masteryXPMap(S).a === 5, 'one habit = +10 Hunter XP, +5 STR XP, +5 mastery XP');
+  assert(JSON.stringify(G.attrXP(S))===JSON.stringify(G.context(S,d).attrXp),'Home, Profile and Statistics attribute XP derive from the same completion totals');
   assert(G.toggleHabit(S, 'a', d, 2).done === false && G.totalXP(S) === 0, 'tapping again undoes it (one completion per habit per day)');
   G.toggleHabit(S, 'a', d, 3); S.habits[0].attr = 'INT'; G.toggleHabit(S, 'a', G.addDays(d, 1), 4);
   assert(G.attrXP(S).STR === 5 && G.attrXP(S).INT === 5, 'changing attribute only affects future XP');
@@ -54,6 +55,10 @@ let c = G.classInfo({ STR: 400, VIT: 380, INT: 0, PER: 0, CHA: 0 }); assert(c.ve
 c = G.classInfo({ STR: 400, VIT: 200, INT: 0, PER: 0, CHA: 0 }); assert(!c.versatile, 'not versatile with a big gap');
 c = G.classInfo({ STR: 60, VIT: 60, INT: 0, PER: 0, CHA: 0 }); assert(!c.versatile, 'not versatile below tier II');
 c = G.classInfo({ STR: 0, VIT: 0, INT: 0, PER: 0, CHA: 0 }); assert(!c.versatile && c.name === 'Brawler', 'empty state -> Brawler');
+{ const eq=G.normalizeAttrDistribution({STR:5,VIT:5,INT:5,PER:5,CHA:5}); assert(G.ATTR_ORDER.every(a=>eq[a]===1),'equal attributes normalize to a balanced outer pentagon'); }
+{ const v=G.normalizeAttrDistribution({STR:10,VIT:5,INT:5,PER:5,CHA:5}); assert(v.STR===1&&v.VIT===.5&&v.INT===.5&&v.PER===.5&&v.CHA===.5,'STR-dominant distribution normalizes against the current maximum'); }
+{ const v=G.normalizeAttrDistribution({STR:400,VIT:200,INT:800,PER:100,CHA:300}),expected={STR:.5,VIT:.25,INT:1,PER:.125,CHA:.375}; assert(G.ATTR_ORDER.every(a=>v[a]===expected[a]),'INT-dominant distribution preserves relative proportions'); }
+{ const v=G.normalizeAttrDistribution({STR:0,VIT:0,INT:0,PER:0,CHA:0}); assert(G.ATTR_ORDER.every(a=>v[a]===0&&Number.isFinite(v[a])),'zero attributes remain centered without division by zero'); }
 
 // ---- hostile import is neutralised
 const evil = { app: 'HunterArsenal', data: { habits: Array.from({ length: 12 }, (_, i) => ({ id: 'x' + i, name: '<img src=x onerror=alert(1)>', attr: 'HAX', icon: '../../x', days: [9, -1] })), completions: { '2026-01-01': { x0: { xp: 999999, ax: 1e9, attr: 'STR' } } }, profile: { name: 'A'.repeat(500), avatar: 'javascript:alert(1)' }, unlocked: { titles: { nope: 1 } }, settings: { theme: '<script>' } } };
@@ -119,6 +124,10 @@ assert(G.ACHIEVEMENTS.length === 25, '25 achievements'); assert(G.TITLES.length 
  assert(['Account','Daily Mission','Appearance','Gameplay','Security','Data & Sync','About'].every(x=>app.includes(`'${x}'`)),'Settings source includes all seven dedicated pages');
  assert(['Core XP','Habit completion','Missed-Habit penalties','Daily Mission','Streak','Streak Freeze','Rest Day','Habit Mastery','Attributes and progression'].every(x=>app.includes(`['${x}'`)),'Hunter\'s Rules defines all nine required sections');
  assert(app.includes('navigator.vibrate')&&app.includes('mission-countdown')&&app.includes('systemAlert'),'Daily Mission notice includes haptic, countdown, and System Notice presentation');
+ const home=(app.match(/function homeHTML\(\) \{([\s\S]*?)\n\}/)||[])[1]||'';
+ assert(!home.includes('help-shortcut')&&!home.includes('aria-label="Hunter\'s Rules"')&&home.includes('rulesHomeCard()'),'Home has no Rules shortcut and retains the first-run Rules card');
+ assert(app.includes('relative=G.normalizeAttrDistribution(attrXp)')&&app.includes('attrXp=G.attrXP(S)')&&app.includes('scale=G.CONST.ATTR_TIER_STARTS[4]')&&app.includes('Scale: 0–${fmt(scale)} XP'),'Versatility uses authoritative XP, relative geometry and fixed 1,600 XP reference');
+ assert(app.includes('Settings · ${esc(settingsSub)}')&&app.includes('"Hunter\'s Rules"'),'Hunter\'s Rules remains accessible from Settings');
  assert(fs.readFileSync(path.join(__dirname,'sw.js'),'utf8').includes("'./manifest.json'")&&fs.readFileSync(path.join(__dirname,'sw.js'),'utf8').includes("'./icons/icon-512.png'"),'service worker precaches relative manifest and app icon');}
 // ---- Daily Mission repeat (a fixed time every day)
 { const S = Store.defaults(), at = new Date(2026, 5, 10, 7, 0, 0).getTime();            // 10 Jun 07:00 local

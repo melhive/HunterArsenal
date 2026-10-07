@@ -137,6 +137,12 @@
     for (const d in S.completions) for (const id in S.completions[d]) { const c = S.completions[d][id]; if (o[c.attr] !== undefined) o[c.attr] += c.ax; }
     return o;
   }
+  function normalizeAttrDistribution(values) {
+    const max = Math.max(0, ...ATTR_ORDER.map(a => Number(values && values[a]) || 0));
+    const normalized = {};
+    ATTR_ORDER.forEach(a => { normalized[a] = max > 0 ? Math.max(0, Number(values && values[a]) || 0) / max : 0; });
+    return normalized;
+  }
   function masteryXPMap(S) {
     const m = {};
     for (const d in S.completions) for (const id in S.completions[d]) m[id] = (m[id] || 0) + S.completions[d][id].mx;
@@ -478,7 +484,7 @@
   HA.Game = {
     CONST, RANKS, ATTRS, ATTR_ORDER, TIER_ROMAN, MASTERY, LEGACY_MASTERY, ACHIEVEMENTS, TITLES, TITLE_CATS, CHALLENGES, THEMES, COSMETICS,
     keyOf, parseKey, addDays, todayKey, levelNeed, LEVEL_START, levelInfo, rankForLevel, rankStartXP, rankProgress, tierProgress, attrTier, masteryTier, classInfo,
-    activeHabits, habitScheduledOn, scheduledHabits, dayRec, totalXP, attrXP, masteryXPMap, habitStats, refreshDay, processDays, toggleHabit,
+    activeHabits, habitScheduledOn, scheduledHabits, dayRec, totalXP, attrXP, normalizeAttrDistribution, masteryXPMap, habitStats, refreshDay, processDays, toggleHabit,
     skillXP, practiceSkill, dqCanSchedule, dqSchedule, dqSetRepeat, dqStopRepeat, dqNextAt, TIME_RE, dqTick, dqAccept, dqDecline, declareRestDay, context, checkUnlocks, hcBalance, themeStatus, getHunterCardData
   };
 })(typeof self !== 'undefined' ? self : window);
