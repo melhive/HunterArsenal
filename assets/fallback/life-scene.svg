@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 40" width="220" height="40">
+<defs>
+<filter id="blur" x="-30%" y="-100%" width="160%" height="300%"><feGaussianBlur stdDeviation="7"/></filter>
+<filter id="soft"><feGaussianBlur stdDeviation="1.2"/></filter>
+<filter id="halo" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="9"/></filter>
+
+<linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#101317"/><stop offset="1" stop-color="#404d5c"/></linearGradient>
+<linearGradient id="lfade" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#14171b"/><stop offset=".45" stop-color="#14171b" stop-opacity="0"/></linearGradient>
+</defs>
+<rect width="220" height="40" fill="url(#sky)"/>
+<ellipse cx="210" cy="23" rx="44" ry="6" fill="#439bb1" opacity="0.44" filter="url(#blur)"/><ellipse cx="162" cy="17" rx="62" ry="10" fill="#439bb1" opacity="0.35" filter="url(#blur)"/><ellipse cx="128" cy="7" rx="70" ry="9" fill="#439bb1" opacity="0.39" filter="url(#blur)"/><ellipse cx="219" cy="23" rx="78" ry="9" fill="#439bb1" opacity="0.22" filter="url(#blur)"/><ellipse cx="8" cy="5" rx="73" ry="8" fill="#439bb1" opacity="0.26" filter="url(#blur)"/><ellipse cx="196" cy="15" rx="79" ry="7" fill="#439bb1" opacity="0.13" filter="url(#blur)"/>
+<circle cx="150" cy="12" r="9" fill="#bec4cc" opacity=".5" filter="url(#soft)"/><circle cx="150" cy="12" r="5.5" fill="#e6e8eb"/>
+<path d="M-10.0 40 V23.7 L-6.0 9.2 L-2.1 23.7 V40Z M-4.9 40 V17.4 L0.3 -5.3 L5.5 17.4 V40Z M3.1 40 V22.8 L8.6 5.3 L14.2 22.8 V40Z M11.0 40 V16.2 L17.9 3.7 L24.8 16.2 V40Z M21.1 40 V12.9 h2.5 v-4 h2.5 v4 h2.5 v-4 h2.5 v4 h2.5 V40Z M28.0 40 V27.9 L34.9 23.0 L41.7 27.9 V40Z M36.1 40 V15.3 L39.8 11.0 L42.3 15.3 L44.7 9.3 L48.4 15.3 V40Z M47.5 40 V16.3 L51.6 8.5 L54.3 16.3 L57.0 5.3 L61.0 16.3 V40Z M56.9 40 V10.6 L59.9 2.7 L61.9 10.6 L63.9 -0.4 L66.8 10.6 V40Z M64.3 40 V23.8 L69.4 13.6 L74.5 23.8 V40Z M72.1 40 V20.5 h1.3 v-4 h1.3 v4 h1.3 v-4 h1.3 v4 h1.3 V40Z M77.7 40 V17.8 L81.1 2.4 L84.5 17.8 V40Z M82.7 40 V23.4 h2.3 v-4 h2.3 v4 h2.3 v-4 h2.3 v4 h2.3 V40Z M93.1 40 V21.8 L96.9 18.1 L99.5 21.8 L102.1 16.6 L106.0 21.8 V40Z M104.8 40 V20.3 L107.8 15.2 L109.7 20.3 L111.7 13.2 L114.6 20.3 V40Z M111.5 40 V19.3 L115.7 9.2 L119.9 19.3 V40Z M117.3 40 V24.9 L120.8 21.0 L123.2 24.9 L125.5 19.5 L129.0 24.9 V40Z M127.9 40 V29.1 L134.4 18.9 L141.0 29.1 V40Z M139.0 40 V28.1 L144.6 23.2 L150.3 28.1 V40Z M147.5 40 V11.0 h2.4 v-4 h2.4 v4 h2.4 v-4 h2.4 v4 h2.4 V40Z M156.2 40 V22.4 h1.9 v-4 h1.9 v4 h1.9 v-4 h1.9 v4 h1.9 V40Z M164.1 40 V16.3 L166.3 10.8 L167.7 16.3 L169.1 8.6 L171.2 16.3 V40Z M170.6 40 V27.1 L176.2 13.9 L181.7 27.1 V40Z M181.1 40 V20.8 h1.7 v-4 h1.7 v4 h1.7 v-4 h1.7 v4 h1.7 V40Z M187.9 40 V27.5 L190.8 24.7 L192.8 27.5 L194.7 23.5 L197.7 27.5 V40Z M197.0 40 V27.2 L203.2 18.0 L209.4 27.2 V40Z M207.9 40 V31.5 L213.1 23.2 L218.2 31.5 V40Z M214.8 40 V18.0 h1.9 v-4 h1.9 v4 h1.9 v-4 h1.9 v4 h1.9 V40Z M223.4 40 V23.0 L226.6 20.2 L228.6 23.0 L230.7 19.1 L233.9 23.0 V40Z" fill="#16191e"/><rect x="20.2" y="22.0" width="1.4" height="1.9" fill="#b9985f" opacity="0.65"/>
+<path d="M168 40 L176 30 L186 30 L196 40Z" fill="#0c0d10"/>
+<g fill="#0c0d10"><circle cx="181" cy="22" r="2.2"/><path d="M178 30 L179 24 L183 24 L184 30Z"/></g>
+<rect width="220" height="40" fill="url(#lfade)"/>
+</svg>

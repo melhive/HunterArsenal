@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="ga" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e6ebf0"/><stop offset=".55" stop-color="#b8d2d8"/><stop offset="1" stop-color="#43a8ba"/>
+    </linearGradient>
+    <filter id="glowa" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3.2" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  
+  <g filter="url(#glowa)" fill="url(#ga)">
+    <!-- H -->
+    <path d="M36 62h18v26h22V62h18v80H76v-34H54v34H36z" transform="translate(0 0) scale(1)"/>
+    <!-- A -->
+    <path fill-rule="evenodd" d="M108 142l19-80h18l19 80h-17l-3-16h-16l-3 16zM134 112h14l-7-30z"/>
+    <!-- sword -->
+    <circle cx="100" cy="12" r="5"/>
+    <rect x="97.5" y="16" width="5" height="18"/>
+    <path d="M66 40l34-8 34 8-8 9-26-6-26 6z"/>
+    <path d="M95 50h10v108l-5 38-5-38z"/>
+  </g></svg>

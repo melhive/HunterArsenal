@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self'; manifest-src 'self'; worker-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'">
+  <title>HunterArsenal</title>
+  <meta name="description" content="HunterArsenal: a human research program. Log protocols, build consistency, measure progress.">
+  <meta name="theme-color" content="#0b0e12">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="HunterArsenal">
+  <!-- KEEP your existing manifest.json and icons/. If your old index.html had <link rel="apple-touch-icon"> / <link rel="icon"> lines, paste them here. -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div id="app" aria-live="polite"></div>
+  <div id="layer"></div>
+  <div id="notice"></div>
+  <noscript><p style="color:#e6ebf0;padding:1rem;font-family:sans-serif">HunterArsenal needs JavaScript.</p></noscript>
+  <script src="js/version.js"></script>
+  <script src="js/gamification.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/security.js"></script>
+  <script src="js/systemwindow.js"></script>
+  <script src="js/hunter-card.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
