@@ -61,7 +61,7 @@
   });
   document.addEventListener('keydown', (e) => {
     if (!active) return;
-    if (e.key === 'Escape') close(active.secondary ? 'secondary' : 'primary');
+    if (e.key === 'Escape') close(active.secondary || active.escapeDismiss ? 'secondary' : 'primary');
     if (e.key === 'Tab') {                                   // keep focus inside the notice
       const f = [...root().querySelectorAll('button')]; if (!f.length) return;
       const first = f[0], last = f[f.length - 1];

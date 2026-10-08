@@ -40,7 +40,7 @@
       streak: { combo: 0, best: 0, freezes: 0, processed: G.addDays(today, -1) },
       unlocked: { achievements: {}, titles: {}, challenges: {} },
       purchases: [], dailyQuest: { state: 'none', at: null, day: null, completed: 0, repeat: null },
-      meta: { lastSeenVersion: null, onboarded: false, rulesSeen: false, rulesVersion: null }
+      meta: { lastSeenVersion: null, lastAcknowledgedWhatsNewVersion: null, onboarded: false, rulesSeen: false, rulesVersion: null }
     };
   }
 
@@ -117,7 +117,7 @@
     const dq = obj(r.dailyQuest), states = ['none', 'scheduled', 'available', 'accepted', 'completed', 'failed', 'declined'];
     out.dailyQuest = { state: states.includes(dq.state) ? dq.state : 'none', at: dq.at ? clamp(dq.at, 0, 4e12, null) : null, day: DATE_RE.test(dq.day || '') ? dq.day : null, completed: Math.round(clamp(dq.completed, 0, 100000, 0)), repeat: /^([01]\d|2[0-3]):[0-5]\d$/.test(dq.repeat || '') ? dq.repeat : null };
     const m = obj(r.meta);
-    out.meta = { lastSeenVersion: str(m.lastSeenVersion, 16, '') || null, onboarded: m.onboarded === true, rulesSeen: m.rulesSeen === true, rulesVersion: str(m.rulesVersion, 16, '') || null };
+    out.meta = { lastSeenVersion: str(m.lastSeenVersion, 16, '') || null, lastAcknowledgedWhatsNewVersion: str(m.lastAcknowledgedWhatsNewVersion, 16, '') || null, onboarded: m.onboarded === true, rulesSeen: m.rulesSeen === true, rulesVersion: str(m.rulesVersion, 16, '') || null };
     return out;
   }
 

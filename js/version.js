@@ -2,8 +2,36 @@
  * Bump APP_VERSION and add a CHANGELOG entry to ship an update.
  * Loaded by index.html AND by sw.js (importScripts), so the cache name always matches. */
 (function (g) {
-  g.APP_VERSION = '2.4.0';
+  g.APP_VERSION = '2.5.0';
   g.CHANGELOG = [
+    {
+      version: '2.5.0',
+      date: '2026-10-08',
+      sections: [
+        { title: 'YEARLY ACTIVITY', notes: [
+          'New GitHub-style yearly activity heatmap',
+          'Monthly calendar visualization',
+          'Daily activity intensity based on habit completion',
+          'Tap a day to view its activity details',
+          'Improved mobile yearly activity navigation'
+        ] },
+        { title: 'HUNTER CREDIT SHOP', notes: [
+          'Purchase confirmation is now required before spending Hunter Credits',
+          'Confirmation shows item cost',
+          'Confirmation shows current HC balance',
+          'Confirmation shows remaining HC after purchase',
+          'Prevents accidental purchases'
+        ] },
+        { title: 'VISUAL IDENTITY', notes: [
+          'Updated HunterArsenal branding',
+          'Human Metamorphosis Program identity'
+        ] },
+        { title: 'IMPROVEMENTS', notes: [
+          'Improved activity detail positioning on mobile',
+          'Improved usability of the yearly activity overview'
+        ] }
+      ]
+    },
     {
       version: '2.4.0',
       date: '2026-10-07',

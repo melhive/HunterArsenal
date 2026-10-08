@@ -5,6 +5,7 @@
 'use strict';
 const HA = window.HA, G = HA.Game, Store = HA.Store, Notice = HA.Notice;
 let S = Store.load();
+let pendingShopPurchase = null, shopPurchaseSeq = 0, shopPurchaseBusy = false;
 
 /* ============================== icons ============================== */
 const ICONS = {
@@ -94,7 +95,7 @@ const rankPill = (id, tag) => `<${tag || 'span'} class="pill" data-rank="${id}" 
 /* ============================== UI state ============================== */
 let view = 'home', homeTab = 'today', bonusSub = null, profileSub = null, settingsSub = null, curDay = today();
 let habitFilter = 'ALL', skillFilter = 'ALL', achFilter = 'all', achSort = 'default', titleFilter = 'all', titleCat = 'All', titleQuery = '';
-let weekOffset = 0, popId = null, menuSkill = null, menuHabit = null, chFilter = 'all', classTab = null, deferredPrompt = null, swReg = null, appVersion = window.APP_VERSION || '', draft = null, dqTimer = null, dqNoticeQueued = false;
+let weekOffset = 0, historyYear = new Date().getFullYear(), activeHeatDay = null, renderedHeatYear = null, popId = null, menuSkill = null, menuHabit = null, chFilter = 'all', classTab = null, deferredPrompt = null, swReg = null, appVersion = window.APP_VERSION || '', draft = null, dqTimer = null, dqNoticeQueued = false;
 
 const save = () => { if (!Store.save(S)) toast('Storage is full or blocked. Export a backup in Settings.'); };
 
@@ -125,7 +126,7 @@ const rankEmblem = (id, color) => `<svg viewBox="0 0 48 54" aria-hidden="true"><
 function sysHeader() {
   const alert = S.dailyQuest.state === 'available';
   return `<header class="sys">
-    ${panel('sys-brand', `<img class="sys-logo" src="assets/branding/hunterarsenal-logo.png" data-fallback="assets/fallback/logo-mark.svg" alt=""><div><h1>HUNTER<b>ARSENAL</b></h1><p>HUMAN RESEARCH PROGRAM</p><small>PROJECT HA-001 // CLASSIFICATION: PERSONAL</small></div>`)}
+    ${panel('sys-brand', `<img class="sys-logo" src="assets/branding/hunterarsenal-logo.png" data-fallback="assets/fallback/logo-mark.svg" alt=""><div><h1>HUNTER<b>ARSENAL</b></h1><p>HUMAN METAMORPHOSIS PROGRAM</p><small>PROJECT HA-001 // CLASSIFICATION: PERSONAL</small></div>`)}
     ${panel('sys-info', `<div><span>SYS v${esc(appVersion)}</span><span>NODE: LOCAL</span><span>STORAGE: ON-DEVICE<i></i></span></div>`)}
     ${panel('sys-bell', `${ic('bell')}${alert ? '<span class="dot"></span>' : ''}`, `data-act="bell" aria-label="Daily Mission alerts${alert ? ': a mission is waiting' : ''}"`, 'button')}
   </header>`;
@@ -353,6 +354,11 @@ function homeHTML() {
 function weekStart(off) { const d = G.parseKey(today()); d.setDate(d.getDate() - d.getDay() + off * 7); return G.keyOf(d); }
 function historyHTML() {
   const ws = weekStart(weekOffset), days = Array.from({ length: 7 }, (_, i) => G.addDays(ws, i)), t = today();
+  const currentYear = new Date().getFullYear();
+  const firstRecordYear = Object.keys(S.completions).reduce((min, d) => /^\d{4}-\d{2}-\d{2}$/.test(d) ? Math.min(min, Number(d.slice(0, 4))) : min, currentYear);
+  const firstYear = Math.min(historyYear, firstRecordYear);
+  const yearOptions = Array.from({ length: currentYear - firstYear + 1 }, (_, i) => currentYear - i)
+    .map(y => `<option value="${y}" ${y === historyYear ? 'selected' : ''}>${y}</option>`).join('');
   const label = weekOffset === 0 ? 'This week' : weekOffset === -1 ? 'Last week' : 'Week of';
   const hasC = h => days.some(d => S.completions[d] && S.completions[d][h.id]);
   const habits = S.habits.filter(h => (!h.archived && h.created <= days[6]) || hasC(h));
@@ -360,17 +366,112 @@ function historyHTML() {
   const rows = habits.map(h => `<div class="hn" style="--ac:${colorOf(h.icon)}">${ic(h.icon)}<span>${esc(h.name)}</span></div>${days.map(d => {
     const done = S.completions[d] && S.completions[d][h.id], sch = G.habitScheduledOn(h, d) || done;
     return `<div class="dot ${done ? 'on' : ''} ${!sch ? 'na' : ''} ${d > t ? 'fut' : ''}" role="img" aria-label="${esc(h.name)} ${d}: ${done ? 'done' : sch ? 'not done' : 'not scheduled'}">${done ? ic('check') : ''}</div>`; }).join('')}`).join('');
-  // yearly heat map (last 26 weeks)
-  const start = G.addDays(weekStart(0), -25 * 7), cells = [];
-  for (let i = 0; i < 26 * 7; i++) {
-    const d = G.addDays(start, i), r = S.days[d], n = S.completions[d] ? Object.keys(S.completions[d]).length : 0;
-    let l = 0; if (n) l = r && r.perfect ? 3 : (r && r.sched && n / r.sched >= .5) ? 2 : 1; if (d > t) l = 0;
-    cells.push(`<i data-l="${l}" title="${d}: ${n} done"></i>`);
-  }
+  // Yearly activity uses stored daily schedule snapshots and completion records.
+  const yearStart = new Date(historyYear, 0, 1), yearDays = ((historyYear % 4 === 0 && historyYear % 100 !== 0) || historyYear % 400 === 0) ? 366 : 365;
+  const now = new Date(), isCurrentYear = historyYear === currentYear;
+  const visibleDays = isCurrentYear
+    ? Math.floor((Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) - Date.UTC(historyYear, 0, 1)) / 86400000) + 1
+    : yearDays;
+  const firstWeekday = (yearStart.getDay() + 6) % 7, weekCount = Math.ceil((firstWeekday + visibleDays) / 7);
+  const monthNames = Array.from({ length: isCurrentYear ? now.getMonth() + 1 : 12 }, (_, m) => {
+    const monthStartDay = Math.floor((Date.UTC(historyYear, m, 1) - Date.UTC(historyYear, 0, 1)) / 86400000);
+    const week = Math.floor((firstWeekday + monthStartDay) / 7);
+    const current = historyYear === currentYear && m === new Date().getMonth();
+    return `<span class="${current ? 'current' : ''}" style="grid-column:${week + 1}"${current ? ' data-current-month="true"' : ''}>${new Date(historyYear, m, 1).toLocaleDateString('en-US', { month: 'short' })}</span>`;
+  }).join('');
+  const weekdayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const heatDays = Array.from({ length: visibleDays }, (_, i) => {
+    const dt = new Date(historyYear, 0, i + 1), key = G.keyOf(dt), weekday = (dt.getDay() + 6) % 7;
+    const done = S.completions[key] ? Object.keys(S.completions[key]).length : 0;
+    const xp = Object.values(S.completions[key] || {}).reduce((sum, entry) => sum + (Number(entry.xp) || 0), 0);
+    const rec = S.days[key], scheduled = rec && Number.isFinite(rec.sched) ? rec.sched : G.scheduledHabits(S, key).length;
+    const rate = scheduled ? Math.min(100, done / scheduled * 100) : 0;
+    const level = !scheduled || !done || key > t ? 0 : rate >= 100 ? 5 : rate > 75 ? 4 : rate > 50 ? 3 : rate > 25 ? 2 : 1;
+    const dateLabel = dt.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+    const percent = Math.round(rate), label = `${dateLabel} — ${done} of ${scheduled} habits completed — ${percent} percent`;
+    const isToday = isCurrentYear && key === t;
+    return `<button type="button" class="heat-day${isToday ? ' today' : ''}" data-l="${level}" data-date="${dateLabel}" data-done="${done}" data-scheduled="${scheduled}" data-percent="${percent}" data-xp="${xp}" style="grid-column:${Math.floor((firstWeekday + i) / 7) + 1};grid-row:${weekday + 1}" aria-label="${label}${isToday ? ', today' : ''}" aria-pressed="false"></button>`;
+  }).join('');
+  const legend = `<div class="legend heat-legend">Less <i data-l="0"></i><i data-l="1"></i><i data-l="2"></i><i data-l="3"></i><i data-l="4"></i><i data-l="5"></i> More</div>`;
   return `<div class="page"><div class="pagebg"></div><h1>History</h1><p class="sub">Review previous days and weeks</p>
     <div class="hist-nav"><button data-act="week" data-v="-1" aria-label="Previous week">← Prev</button><b>${label} (${fmtDate(days[0])} – ${fmtDate(days[6])})</b><button data-act="week" data-v="1" ${weekOffset >= 0 ? 'disabled' : ''} aria-label="Next week">Next →</button></div>
     ${panel('card', habits.length ? `<div class="wk">${header}${rows}</div>` : '<div class="empty"><b>No habits yet</b>Your weekly grid appears here once you add habits.</div>')}
-    ${panel('card', `<h3>Yearly Overview</h3><div class="heat" role="img" aria-label="Activity over the last 26 weeks">${cells.join('')}</div><div class="legend">Less <i style="background:#22282f"></i><i style="background:#323c48"></i><i style="background:#495869"></i><i style="background:var(--accent)"></i> More</div>`)}</div>`;
+    ${panel('card', `<div class="yearly-head"><h3>Yearly Activity</h3><label class="sr" for="history-year">Activity year</label><select class="select" id="history-year" data-change="history-year" aria-label="Activity year">${yearOptions}</select></div><div class="heat-scroll" aria-label="Yearly habit activity"><div class="heat-weekdays" aria-hidden="true">${weekdayNames.map(d => `<span>${d}</span>`).join('')}</div><div class="heat-calendar-viewport" id="history-heat-scroll" tabindex="0" aria-label="Scrollable calendar weeks"><div class="heat-calendar" style="--heat-weeks:${weekCount}"><div class="heat-months" aria-hidden="true">${monthNames}</div><div class="heat-grid" role="group" aria-label="Daily habit completion for ${historyYear}">${heatDays}</div></div></div></div>${legend}`)}</div>`;
+}
+
+function hideHeatTooltip() {
+  if (activeHeatDay) {
+    activeHeatDay.classList.remove('selected');
+    activeHeatDay.setAttribute('aria-pressed', 'false');
+    activeHeatDay.removeAttribute('aria-describedby');
+    activeHeatDay = null;
+  }
+  const tooltip = document.getElementById('heat-tooltip');
+  if (tooltip) tooltip.remove();
+}
+
+function showHeatTooltip(day) {
+  if (!day || !day.isConnected) return;
+  if (activeHeatDay && activeHeatDay !== day) {
+    activeHeatDay.classList.remove('selected');
+    activeHeatDay.setAttribute('aria-pressed', 'false');
+    activeHeatDay.removeAttribute('aria-describedby');
+  }
+  activeHeatDay = day;
+  day.classList.add('selected');
+  day.setAttribute('aria-pressed', 'true');
+  day.setAttribute('aria-describedby', 'heat-tooltip');
+  let tooltip = document.getElementById('heat-tooltip');
+  if (!tooltip) {
+    tooltip = document.createElement('div');
+    tooltip.id = 'heat-tooltip';
+    tooltip.className = 'heat-tooltip';
+    tooltip.setAttribute('role', 'tooltip');
+    document.body.appendChild(tooltip);
+  }
+  tooltip.innerHTML = `<b>${day.dataset.date}</b><span>Completed <strong>${day.dataset.done} / ${day.dataset.scheduled} habits</strong></span><span>Completion <strong>${day.dataset.percent}%</strong></span>${Number(day.dataset.xp) ? `<span>Habit XP <strong>+${fmt(Number(day.dataset.xp))} XP</strong></span>` : ''}`;
+  const rect = day.getBoundingClientRect(), viewport = day.closest('.heat-calendar-viewport');
+  const cardBody = day.closest('.card')?.querySelector('.frame > .body');
+  const area = cardBody || viewport, areaRect = area?.getBoundingClientRect();
+  const visual = window.visualViewport, viewLeft = visual ? visual.offsetLeft : 0, viewTop = visual ? visual.offsetTop : 0;
+  const viewRight = viewLeft + (visual ? visual.width : window.innerWidth), viewBottom = viewTop + (visual ? visual.height : window.innerHeight);
+  const margin = 10, gap = 8;
+  let leftBound = Math.max(viewLeft, areaRect ? areaRect.left : viewLeft) + margin;
+  let rightBound = Math.min(viewRight, areaRect ? areaRect.right : viewRight) - margin;
+  let topBound = Math.max(viewTop, areaRect ? areaRect.top : viewTop) + margin;
+  let bottomBound = Math.min(viewBottom, areaRect ? areaRect.bottom : viewBottom) - margin;
+  if (rightBound < leftBound) { leftBound = viewLeft + margin; rightBound = viewRight - margin; }
+  if (bottomBound < topBound) { topBound = viewTop + margin; bottomBound = viewBottom - margin; }
+
+  tooltip.style.maxWidth = `${Math.max(0, rightBound - leftBound)}px`;
+  const tip = tooltip.getBoundingClientRect();
+  const roomRight = rightBound - rect.right - gap, roomLeft = rect.left - leftBound - gap;
+  const fitsRight = roomRight >= tip.width, fitsLeft = roomLeft >= tip.width;
+  const centeredLeft = Math.max(leftBound, Math.min(rightBound - tip.width, rect.left + (rect.width - tip.width) / 2));
+  const centeredTop = Math.max(topBound, Math.min(bottomBound - tip.height, rect.top + (rect.height - tip.height) / 2));
+  const above = rect.top - gap - tip.height, below = rect.bottom + gap;
+  let left, top;
+  if (fitsRight && !fitsLeft) {
+    left = rect.right + gap;
+    top = centeredTop;
+  } else if (fitsLeft && !fitsRight) {
+    left = rect.left - gap - tip.width;
+    top = centeredTop;
+  } else if (fitsLeft && fitsRight && above >= topBound) {
+    left = centeredLeft;
+    top = above;
+  } else if (fitsLeft && fitsRight && below + tip.height <= bottomBound) {
+    left = centeredLeft;
+    top = below;
+  } else if (fitsRight || fitsLeft) {
+    left = fitsRight && (!fitsLeft || roomRight >= roomLeft) ? rect.right + gap : rect.left - gap - tip.width;
+    top = centeredTop;
+  } else {
+    left = centeredLeft;
+    top = above >= topBound ? above : below + tip.height <= bottomBound ? below : Math.max(topBound, Math.min(bottomBound - tip.height, above));
+  }
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
 }
 
 /* ---------- stats ---------- */
@@ -448,7 +549,7 @@ function settingsHTML() {
   } else if (settingsSub === 'Data & Sync') {
     body = `${sec('Backup',`${item('lock','Export encrypted backup','AES-256, protected by your passphrase','export')}${item('download','Export plain backup','Readable local backup file','export-plain')}${item('restore','Import / restore backup','Encrypted or plain','import')}${item('trash','Reset all data','Erases this device data','reset')}`,'flush')}${sec('Sync',`<div class="setrow"><div><b>Sync</b><small>End-to-end encrypted sync is planned</small></div><span class="chipstat">Coming soon</span></div>`)}${sec('Install App',install)}${sec('Archived Habits',`Habits stay available for restore under Account.`)}`;
   } else {
-    body = `${sec('HunterArsenal',`<div class="setrow"><b>Version</b><span>v${esc(appVersion)}</span></div>${item('info',"What's New",'View the v2.4.0 changelog','whatsnew')}${item('scroll',"Hunter's Rules",'Nine sections with live progression values','rules')}${install}${item('restore','Check for updates','Refresh the offline app cache','update')}`)}`;
+    body = `${sec('HunterArsenal',`<div class="setrow"><b>Version</b><span>v${esc(appVersion)}</span></div>${item('info',"What's New",`View the v${esc(appVersion)} release notes`,'whatsnew')}${item('scroll',"Hunter's Rules",'Nine sections with live progression values','rules')}${install}${item('restore','Check for updates','Refresh the offline app cache','update')}`)}`;
   }
   return `<div class="page"><div class="pagebg"></div>${head}${body}</div>`;
 }
@@ -478,9 +579,18 @@ function rulesHTML() {
 let lastKey = '', lastTab = '';
 function render() {
   const sc = $('#scroll'), top = sc ? sc.scrollTop : 0;
+  const oldHeatScroll = view === 'history' ? $('#history-heat-scroll')?.scrollLeft : null;
+  const heatYearChanged = view === 'history' && renderedHeatYear !== historyYear;
   const screens = { home: homeHTML, history: historyHTML, stats: statsHTML, profile: profileHTML, settings: settingsHTML, rules: rulesHTML };
   $('#app').innerHTML = `<main class="scroll" id="scroll" aria-live="off">${screens[view]()}</main><div class="dock">${dockHTML()}</div>`;
   const sc2 = $('#scroll'); sc2.scrollTop = top; popId = null;
+  if (view === 'history') requestAnimationFrame(() => {
+    const heatScroll = $('#history-heat-scroll');
+    if (!heatScroll) return;
+    if (heatYearChanged || oldHeatScroll === null) heatScroll.scrollLeft = historyYear === new Date().getFullYear() ? heatScroll.scrollWidth : 0;
+    else heatScroll.scrollLeft = oldHeatScroll;
+    renderedHeatYear = historyYear;
+  });
   const key = view + '|' + (view === 'profile' ? profileSub : view === 'settings' ? settingsSub : ''), tk = view === 'home' ? homeTab + '|' + bonusSub : '';
   if (key !== lastKey) sc2.classList.add('enter'); else if (tk !== lastTab) sc2.classList.add('swap');
   lastKey = key; lastTab = tk;
@@ -699,13 +809,85 @@ function themeOpen(id) {
   const equip = () => { S.settings.theme = id; save(); applyTheme(); render(); toast(`${th.name} theme equipped`); };
   if (S.settings.theme === id) return toast(`${th.name} is already equipped`);
   if (st.owned) return equip();
-  if (st.buy) {
-    const bal = G.hcBalance(S).balance;
-    if (bal < st.cost) return Notice.show({ title: 'NOT ENOUGH HC', tone: '#b5575f', dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>${esc(th.name)} theme</span><b>${st.cost} HC</b></div><div><span>Your balance</span><b>${fmt(bal)} HC</b></div></div><p style="margin:.6rem 0 0;font-size:.78rem;color:#aeb7c2">Earn Hunter Credits from qualifications and challenges.</p>` });
-    return Notice.show({ title: 'UNLOCK DISPLAY MODE?', subtitle: esc(th.name), dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>Cost</span><b>${st.cost} HC</b></div><div><span>Balance after</span><b>${fmt(bal - st.cost)} HC</b></div></div>`, secondary: { label: 'CANCEL' },
-      primary: { label: 'UNLOCK', onClick: () => { S.purchases.push({ id, cost: st.cost, at: Date.now() }); S.settings.theme = id; save(); applyTheme(); render(); toast(`${th.name} unlocked and equipped`); } } });
-  }
+  if (st.buy) return requestShopPurchase('theme', id);
   Notice.show({ title: 'DISPLAY MODE LOCKED', subtitle: esc(th.name), dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>Requirement</span><b>${esc(st.label || 'Locked')}</b></div></div>` });
+}
+
+function shopPurchaseDetails(kind, id) {
+  if (kind === 'theme') {
+    const item = G.THEMES.find(x => x.id === id); if (!item) return null;
+    const status = G.themeStatus(S, item, G.context(S, today()));
+    return { item, owned: status.owned, purchasable: !!status.buy, cost: status.cost, name: item.name };
+  }
+  const item = G.COSMETICS.find(x => x.id === id); if (!item) return null;
+  return { item, owned: S.purchases.some(p => p.id === id), purchasable: true, cost: item.cost, name: item.name };
+}
+
+function requestShopPurchase(kind, id) {
+  if (pendingShopPurchase || shopPurchaseBusy) return;
+  const details = shopPurchaseDetails(kind, id); if (!details || details.owned || !details.purchasable) return;
+  const balance = G.hcBalance(S).balance, token = ++shopPurchaseSeq;
+  if (balance < details.cost) {
+    return Notice.show({ title: 'INSUFFICIENT HUNTER CREDITS', subtitle: esc(details.name), tone: '#b5575f', dismissible: true,
+      bodyHTML: `<div class="nw-rows"><div><span>Cost</span><b>${fmt(details.cost)} HC</b></div><div><span>Current balance</span><b>${fmt(balance)} HC</b></div><div><span>Shortfall</span><b>${fmt(details.cost - balance)} HC</b></div></div>`,
+      primary: { label: 'BACK' } });
+  }
+  pendingShopPurchase = { kind, id, token, balance, cost: details.cost };
+  Notice.show({ title: 'CONFIRM PURCHASE', subtitle: esc(details.name), dismissible: true,
+    bodyHTML: `<div class="nw-rows"><div><span>Cost</span><b>${fmt(details.cost)} HC</b></div><div><span>Current balance</span><b>${fmt(balance)} HC</b></div><div><span>Balance after purchase</span><b>${fmt(balance - details.cost)} HC</b></div></div><p style="margin:.6rem 0 0;font-size:.82rem;color:#aeb7c2">Are you sure you want to purchase this item?</p>`,
+    secondary: { label: 'CANCEL', onClick: () => { if (pendingShopPurchase && pendingShopPurchase.token === token) pendingShopPurchase = null; } },
+    primary: { label: 'CONFIRM PURCHASE', onClick: () => confirmShopPurchase(token) } });
+}
+
+function confirmShopPurchase(token) {
+  const pending = pendingShopPurchase;
+  if (!pending || pending.token !== token || shopPurchaseBusy) return;
+  pendingShopPurchase = null;
+  shopPurchaseBusy = true;
+  const balance = G.hcBalance(S).balance;
+  if (balance !== pending.balance) {
+    shopPurchaseBusy = false;
+    requestShopPurchase(pending.kind, pending.id);
+    return;
+  }
+  const result = commitShopPurchase(pending.kind, pending.id, pending.cost);
+  shopPurchaseBusy = false;
+  if (result && result.insufficient) requestShopPurchase(pending.kind, pending.id);
+  else if (result && result.unavailable) toast('This item is no longer available');
+}
+
+function commitShopPurchase(kind, id, expectedCost) {
+  const details = shopPurchaseDetails(kind, id);
+  if (!details) return { unavailable: true };
+  const alreadyOwned = details.owned;
+  if (!alreadyOwned && (!details.purchasable || details.cost !== expectedCost)) return { unavailable: true };
+  const key = kind === 'theme' ? 'theme' : details.item.type === 'border' ? 'border' : 'namePlate';
+  if (alreadyOwned) {
+    if (kind === 'theme') { S.settings.theme = id; applyTheme(); }
+    else S.settings[key] = id;
+    save(); render(); toast(`${details.name} ${kind === 'theme' ? 'theme ' : ''}equipped`);
+    return { ok: true, owned: true };
+  }
+  const balance = G.hcBalance(S).balance;
+  if (balance < details.cost) return { insufficient: true };
+  S.purchases.push({ id, cost: details.cost, at: Date.now() });
+  if (kind === 'theme') S.settings.theme = id;
+  else S.settings[key] = id;
+  save();
+  if (kind === 'theme') applyTheme();
+  render();
+  toast(kind === 'theme' ? `${details.name} unlocked and equipped` : `${details.name} purchased and equipped`);
+  return { ok: true };
+}
+
+function cosmeticOpen(id) {
+  const details = shopPurchaseDetails('cosmetic', id); if (!details) return;
+  const key = details.item.type === 'border' ? 'border' : 'namePlate';
+  if (S.settings[key] === id) { S.settings[key] = 'none'; save(); render(); return; }
+  if (details.owned) {
+    S.settings[key] = id; save(); render(); toast(`${details.name} equipped`); return;
+  }
+  requestShopPurchase('cosmetic', id);
 }
 
 /* ============================== daily quest ============================== */
@@ -765,7 +947,7 @@ function openOnboarding() { ob = ob || { step: 'welcome', name: '', bd: '', ls: 
 function renderOb() {
   let inner;
   if (ob.step === 'welcome') {
-    inner = `<div class="ob-hero"><img src="assets/branding/hunterarsenal-logo.png" data-fallback="assets/fallback/logo-emblem.svg" alt=""><h2>HUNTER ACCESS</h2><p>A human research program.<br>Log habits. Build consistency. Measure progress.</p></div>
+    inner = `<div class="ob-hero"><img src="assets/branding/hunterarsenal-logo.png" data-fallback="assets/fallback/logo-emblem.svg" alt=""><h2>HUNTER ACCESS</h2><p>Human Metamorphosis Program.<br>Log habits. Build consistency. Measure progress.</p></div>
       <button class="btn" data-act="ob-next">Initialize</button><button class="btn ghost" data-act="import">Already a Hunter? Import backup</button>`;
   } else if (ob.step === 'create') {
     inner = `${sheetHead('user', 'Create your Hunter', 'Every Hunter begins at Level 1', true).replace(/<button class="xbtn".*?<\/button>/, '')}
@@ -791,10 +973,22 @@ function finishOnboarding() {
   S.meta.onboarded = true; S.meta.lastSeenVersion = window.APP_VERSION; ob = null; G.refreshDay(S, today()); save(); closeSheet(); render();
   Notice.show({ title: 'SYSTEM', subtitle: 'INITIALIZED', sound: 'unlock', primary: { label: 'ENTER SYSTEM' },
     bodyHTML: `<ul class="nw-list"><li>${ic('check')}Hunter identified <span style="margin-left:auto;font-family:var(--font-mono);color:var(--tone)">${esc(S.profile.hunterId)}</span></li><li>${ic('check')}System linked <span style="margin-left:auto;color:#8c97a4">on this device</span></li><li>${ic('check')}Starter habits added <span style="margin-left:auto;color:#8c97a4">${added}</span></li><li>${ic('check')}Ready for assignment</li></ul>`, quote: 'Discipline is the system.' });
+  setTimeout(showWhatsNewIfNeeded, 600);
 }
-function whatsNew(force) {
-  const entry = (window.CHANGELOG || [])[0]; if (!entry) return;
-  Notice.show({ title: force ? 'WHAT’S NEW' : 'UPDATED', subtitle: `v${esc(entry.version)}`, bodyHTML: `<ul class="nw-list">${entry.notes.map(n => `<li>${ic('check')}${esc(n)}</li>`).join('')}</ul>` });
+function whatsNew() {
+  const version = String(window.APP_VERSION || ''), entry = (window.CHANGELOG || []).find(item => item.version === version);
+  if (!entry) return;
+  const sections = entry.sections || [{ title: 'WHAT’S NEW', notes: entry.notes || [] }];
+  const sectionHTML = sections.map(section => `<div><b>${esc(section.title)}</b><ul class="nw-list">${section.notes.map(note => `<li>${ic('check')}${esc(note)}</li>`).join('')}</ul></div>`).join('');
+  Notice.show({ eyebrow: 'SYSTEM UPDATE', title: 'HUNTERARSENAL', subtitle: `v${esc(version)}`, escapeDismiss: true,
+    bodyHTML: `<p><b>HUMAN METAMORPHOSIS PROGRAM</b></p><p><b>WHAT’S NEW</b></p>${sectionHTML}`,
+    quote: 'All systems operational.',
+    primary: { label: 'CONTINUE', onClick: () => { S.meta.lastAcknowledgedWhatsNewVersion = version; save(); } }
+  });
+}
+function showWhatsNewIfNeeded() {
+  const version = String(window.APP_VERSION || '');
+  if (version && S.meta.lastAcknowledgedWhatsNewVersion !== version) whatsNew();
 }
 function hcInfo() {
   const b = G.hcBalance(S);
@@ -859,6 +1053,32 @@ function resetAll() {
 /* ============================== events ============================== */
 document.addEventListener('error', (e) => { const t = e.target; if (t && t.tagName === 'IMG' && t.dataset && t.dataset.fallback && !t.dataset.fb) { t.dataset.fb = '1'; t.src = t.dataset.fallback; } }, true);
 
+document.addEventListener('pointerover', (e) => {
+  const day = e.target.closest && e.target.closest('.heat-day');
+  if (day && e.pointerType !== 'touch') showHeatTooltip(day);
+});
+document.addEventListener('pointerout', (e) => {
+  if (e.pointerType === 'touch') return;
+  if (e.target.closest && e.target.closest('.heat-day') && !e.relatedTarget?.closest?.('.heat-day')) hideHeatTooltip();
+});
+document.addEventListener('focusin', (e) => {
+  const day = e.target.closest && e.target.closest('.heat-day');
+  if (day) showHeatTooltip(day);
+});
+document.addEventListener('focusout', (e) => {
+  if (e.target.closest && e.target.closest('.heat-day') && !e.relatedTarget?.closest?.('.heat-day')) hideHeatTooltip();
+});
+document.addEventListener('click', (e) => {
+  const day = e.target.closest && e.target.closest('.heat-day');
+  if (day) showHeatTooltip(day);
+  else if (activeHeatDay) hideHeatTooltip();
+});
+document.addEventListener('scroll', (e) => {
+  if (activeHeatDay && e.target !== document && e.target !== document.documentElement && e.target !== document.body) hideHeatTooltip();
+}, true);
+window.addEventListener('resize', hideHeatTooltip);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && activeHeatDay) hideHeatTooltip(); });
+
 document.addEventListener('click', (e) => {
   if ((menuSkill || menuHabit) && !e.target.closest('.menu') && !e.target.closest('[data-act="skill-menu"],[data-act="habit-menu"]')) { menuSkill = null; menuHabit = null; render(); }
   const el = e.target.closest('[data-act]'); if (!el) return;
@@ -907,15 +1127,7 @@ document.addEventListener('click', (e) => {
     case 'equip-title': equipTitle(d.id); break;
     case 'theme-open': themeOpen(d.id); break;
     case 'shop-tab': if (['Display Modes','Photo Borders','Name Plates'].includes(d.v)) { S.settings.shopTab=d.v; save(); render(); } break;
-    case 'cosmetic-open': {
-      const item=G.COSMETICS.find(x=>x.id===d.id); if(!item) break;
-      const key=item.type==='border'?'border':'namePlate', equipped=S.settings[key]===item.id;
-      if(equipped) S.settings[key]='none';
-      else if(S.purchases.some(p=>p.id===item.id)) S.settings[key]=item.id;
-      else if(G.hcBalance(S).balance<item.cost) { toast('Not enough Hunter Credits'); break; }
-      else { S.purchases.push({id:item.id,cost:item.cost,at:Date.now()}); S.settings[key]=item.id; }
-      save(); render(); break;
-    }
+    case 'cosmetic-open': cosmeticOpen(d.id); break;
     case 'hc-info': hcInfo(); break;
     case 'rank-modal': rankModal(); break;
     case 'class-modal': classModal(d.a); break;
@@ -954,7 +1166,7 @@ document.addEventListener('click', (e) => {
     case 'restore': if (G.activeHabits(S).length >= G.CONST.MAX_ACTIVE_HABITS) { limitNotice(); break; } mutate(() => { const h = S.habits.find(x => x.id === d.id); if (h) h.archived = false; }); toast('Habit restored with its mastery'); break;
     case 'install': if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.then(choice => { if (choice && choice.outcome === 'accepted') toast('Installation started'); deferredPrompt = null; render(); }).catch(() => { deferredPrompt = null; render(); }); } break;
     case 'update': checkUpdate(); break;
-    case 'whatsnew': whatsNew(true); break;
+    case 'whatsnew': whatsNew(); break;
     case 'export': exportEncrypted(); break;
     case 'export-plain': exportData(); break;
     case 'sec-manage': HA.Security.manage(() => render()); break;
@@ -976,6 +1188,7 @@ document.addEventListener('change', (e) => {
   const k = e.target.dataset && e.target.dataset.change; if (!k) return;
   if (k === 'ach-sort') { achSort = e.target.value; render(); }
   else if (k === 'title-cat') { titleCat = e.target.value; render(); }
+  else if (k === 'history-year') { const y = Number(e.target.value); if (Number.isInteger(y) && y >= 1 && y <= new Date().getFullYear()) { hideHeatTooltip(); historyYear = y; render(); } }
   else if (k === 'theme') { if (G.THEMES.some(t => t.id === e.target.value)) { S.settings.theme = e.target.value; save(); applyTheme(); render(); } }
   else if (k === 'shop-tab') { S.settings.shopTab=e.target.value; save(); render(); }
   else if (k === 'h-sched') { syncDraftText(); draft.sched = e.target.value; if (draft.sched === 'custom' && !(draft.days && draft.days.length)) draft.days = [new Date().getDay()]; renderHabitForm(true); }
@@ -1071,7 +1284,8 @@ G.checkUnlocks(S, today());
 save(); render();
 if (!S.meta.onboarded) openOnboarding();
 else {
-  if (S.meta.lastSeenVersion !== window.APP_VERSION) { S.meta.lastSeenVersion = window.APP_VERSION; save(); setTimeout(() => whatsNew(false), 600); }
+  if (S.meta.lastSeenVersion !== window.APP_VERSION) { S.meta.lastSeenVersion = window.APP_VERSION; save(); }
+  setTimeout(showWhatsNewIfNeeded, 600);
   setTimeout(() => reportEvents(boot.events), 900);
   if (S.dailyQuest.state === 'available') dqTimer = setTimeout(showDQ, G.CONST.DAILY_QUEST_REOPEN_DELAY_MS);   // missed schedule: show ~2s after opening
 }
