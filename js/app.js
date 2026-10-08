@@ -113,7 +113,7 @@ function applyTheme() {
 function snap() {
   const c = G.context(S, today()), mx = G.masteryXPMap(S), m = {};
   S.habits.forEach(h => { m[h.id] = G.masteryTier(mx[h.id] || 0).idx; });
-  return { level: c.level, rankIdx: c.rankIdx, attrIdx: { ...c.attrIdx }, mastery: m };
+  return { level: c.level, rankIdx: c.rankIdx, attrXp: { ...c.attrXp }, mastery: m };
 }
 const currentTitle = () => (S.profile.equippedTitle && S.unlocked.titles[S.profile.equippedTitle] ? G.TITLES.find(t => t.id === S.profile.equippedTitle) : null);
 function liveCombo() { const r = S.days[today()]; return S.streak.combo + (r && r.perfect ? 1 : 0); }
@@ -137,7 +137,7 @@ function levelCardHTML() {
   return panel('lvlcard', `<div class="lc-left"><div class="lc-lv">Lv. ${li.level}</div>
       <div class="bar" role="progressbar" aria-label="Progress to next rank" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(rp.pct)}"><i style="width:${rp.pct}%"></i></div>
       <div class="lc-xp">${fmt(xp)} / ${fmt(rp.nextXP)} XP${rp.max ? ' · MAX' : ''}</div></div>
-    <div class="lc-rank" style="--rc:${rk.color}"><span class="emb">${rankEmblem(rk.id, rk.color)}</span><div><b>${rk.id}-RANK</b><span class="t">${esc(rk.title)}</span><em class="cls-pill">${esc(cls.name.toUpperCase())}</em></div></div>${ic('chev', 'lc-chev')}`,
+      <div class="lc-rank" style="--rc:${rk.color}"><span class="emb">${rankEmblem(rk.id, rk.color)}</span><div><b>${rk.id}-RANK</b><span class="t">${esc(rk.title)}</span><em class="cls-pill" data-act="class-overview" role="button" tabindex="0" aria-label="Open Attribute Class Overview">${esc(cls.name.toUpperCase())}</em></div></div>${ic('chev', 'lc-chev')}`,
     'data-act="rank-modal" aria-label="Level and rank details"', 'button');
 }
 
@@ -637,9 +637,9 @@ function announce(before, after, ev, fresh) {
     Notice.show({ title: 'LEVEL INCREASE', subtitle: `LEVEL ${after.level}`, sound: 'levelup', bodyHTML: `<div class="nw-rows"><div><span>Rank</span><b>${rk.id}-Rank · ${esc(rk.title)}</b></div><div><span>Class</span><b>${esc(cls.name)}</b></div><div><span>Core XP</span><b>${fmt(G.totalXP(S))}</b></div></div>`, quote: 'Record updated.' });
     if (after.rankIdx > before.rankIdx) Notice.show({ title: 'PROMOTION', subtitle: `${rk.id}-RANK`, tone: rk.color, sound: 'rankup', bodyHTML: `<div class="nw-rows"><div><span>New rank</span><b>${rk.id}-Rank</b></div><div><span>title</span><b>${esc(rk.title)}</b></div></div>`, quote: 'Entry recorded.' });
   }
-  G.ATTR_ORDER.forEach(a => {
-    if (after.attrIdx[a] > before.attrIdx[a]) { const t = G.attrTier(a, G.attrXP(S)[a]);
-      Notice.show({ title: 'ATTRIBUTE TIER UP', subtitle: esc(t.name.toUpperCase()), tone: ac(a), sound: 'rankup', bodyHTML: `<div class="nw-head"><span class="qicon" style="--qc:${ac(a)}">${ic(G.ATTRS[a].icon)}</span><div><b>${a} — ${G.ATTRS[a].name}</b><span>Tier ${G.TIER_ROMAN[t.idx]} · ${esc(t.name)}</span></div></div>`, quote: `${G.ATTRS[a].name} readings updated.` }); }
+  G.newAttributeClassUnlocks(before.attrXp, after.attrXp).forEach(({ attr, idx, name, awakening }) => {
+    const detail = awakening ? 'Attribute Class AWAKENING unlocked.' : `Attribute Class Tier ${G.TIER_ROMAN[idx]} unlocked.`;
+    Notice.show({ title: 'ATTRIBUTE CLASS ACHIEVED', subtitle: `${attr} — ${esc(name)}`, tone: ac(attr), sound: 'rankup', bodyHTML: `<div class="nw-head"><span class="qicon" style="--qc:${ac(attr)}">${ic(G.ATTRS[attr].icon)}</span><div><b>${attr} — ${G.ATTRS[attr].name}</b><span>${detail}</span></div></div>`, quote: `${G.ATTRS[attr].name} readings updated.` });
   });
   Object.keys(after.mastery).forEach(id => { if (before.mastery[id] !== undefined && after.mastery[id] > before.mastery[id]) { const h = S.habits.find(x => x.id === id); if (h) setTimeout(() => toast(`${h.name}: mastery ${G.MASTERY[after.mastery[id]]}`), 600); } });
   if (ev.dqCompleted) Notice.show({ title: 'DAILY MISSION', subtitle: 'CLEARED', sound: 'unlock', bodyHTML: `<div class="nw-rows"><div><span>Reward</span><b>+${G.CONST.DAILY_QUEST_BONUS} Core XP</b></div></div>`, quote: 'Mission complete. Schedule your next one any time.' });
@@ -768,10 +768,33 @@ function classModal(tab) {
   const A = G.ATTRS[a], t = G.attrTier(a, ax[a]);
   openSheet(`${sheetHead(A.icon, 'Attribute Class', `Dominant: ${cls.attr} · ${esc(cls.name)}`)}
     <div class="ctabs" role="tablist" aria-label="Attributes">${G.ATTR_ORDER.map(x => `<button role="tab" style="--ac:${ac(x)}" aria-selected="${x === a}" data-act="class-tab" data-a="${x}">${x}</button>`).join('')}</div>
-    <div class="chead" style="--ac:${A.color}">${ic(A.icon)}<div><small>${a} — ${A.name.toUpperCase()}</small><b>${esc(t.name)}</b><em>Tier ${G.TIER_ROMAN[t.idx]} · ${t.max ? `${fmt(ax[a])} XP · MAX` : `${fmt(ax[a])} / ${fmt(t.next)} XP`}</em></div></div>
+    <div class="chead" style="--ac:${A.color}">${ic(A.icon)}<div><small>${a} — ${A.name.toUpperCase()}</small><b>${esc(t.name)}</b><em>${attrProgressText(t, ax[a])}</em></div></div>
     <div class="bar" style="margin:.5rem 0 .8rem;--bar:${A.color}" aria-hidden="true"><i style="width:${t.pct}%;background:${A.color};box-shadow:0 0 .6rem ${A.color}4d"></i></div>
-    <div class="tiers" role="list" style="--ac:${A.color}">${A.classes.map((n, i) => `<div class="trow2 ${i === t.idx ? 'cur' : ''} ${i < t.idx ? 'done' : ''}" role="listitem"><span class="rn">${G.TIER_ROMAN[i]}</span><div><b>${esc(n)}</b><small>${fmt(G.CONST.ATTR_TIER_STARTS[i])} XP</small></div>${i < t.idx ? ic('check') : i === t.idx ? '<span class="here">NOW</span>' : ic('lock')}</div>`).join('')}</div>
+    <div class="tiers" role="list" style="--ac:${A.color}">${attributeClassRows(a, ax[a], t)}</div>
     ${cls.versatile ? `<div class="vers-note" style="margin-top:.6rem"><b>VERSATILE</b> ${cls.sorted[0].a} and ${cls.sorted[1].a} are closely matched. A label only; it changes nothing.</div>` : ''}`, { label: 'Attribute class', nofocus: true });
+}
+function attrProgressText(t, xp) {
+  if (t.noClass) return `${fmt(xp)} / ${fmt(t.next)} XP to AWAKENING`;
+  if (t.awakening) return `${fmt(xp)} / ${fmt(t.next)} XP to ${esc(t.nextName)}`;
+  return t.max ? `Tier ${G.TIER_ROMAN[t.idx]} · ${fmt(xp)} XP · MAX` : `Tier ${G.TIER_ROMAN[t.idx]} · ${fmt(xp)} / ${fmt(t.next)} XP`;
+}
+function attributeClassRows(a, xp, t) {
+  const awakeningCurrent = t.awakening, awakeningDone = xp >= G.CONST.ATTR_TIER_STARTS[0];
+  const awakeningState = awakeningCurrent ? 'cur' : awakeningDone ? 'done' : '';
+  const awakeningMark = awakeningCurrent ? '<span class="here">NOW</span>' : awakeningDone ? ic('check') : ic('lock');
+  const awakening = `<div class="trow2 ${awakeningState}" role="listitem"><span class="rn">A</span><div><b>${G.ATTR_AWAKENING}</b><small>1 XP</small></div>${awakeningMark}</div>`;
+  return awakening + G.ATTRS[a].classes.map((name, i) => {
+    const done = i < t.idx, current = i === t.idx;
+    return `<div class="trow2 ${current ? 'cur' : ''} ${done ? 'done' : ''}" role="listitem"><span class="rn">${G.TIER_ROMAN[i]}</span><div><b>${esc(name)}</b><small>${fmt(G.CONST.ATTR_TIER_STARTS[i])} XP</small></div>${done ? ic('check') : current ? '<span class="here">NOW</span>' : ic('lock')}</div>`;
+  }).join('');
+}
+function classOverviewModal() {
+  const ax = G.attrXP(S);
+  const content = G.sortAttributesByXP(ax).map(a => {
+    const A = G.ATTRS[a], xp = ax[a], t = G.attrTier(a, xp);
+    return `<section style="margin-bottom:.8rem;--ac:${A.color}"><div class="chead"><span class="qicon" style="--qc:${A.color}">${ic(A.icon)}</span><div><small>${a} — ${A.name.toUpperCase()}</small><b>${esc(t.name)}</b><em>${attrProgressText(t, xp)}</em></div></div><div class="bar" style="margin:.45rem 0;--bar:${A.color}" aria-hidden="true"><i style="width:${t.pct}%;background:${A.color}"></i></div><div class="tiers" role="list" aria-label="${A.name} Attribute Class progression">${attributeClassRows(a, xp, t)}</div></section>`;
+  }).join('');
+  openSheet(`${sheetHead('target', 'Attribute Class Overview', 'Individual progression across all five Attributes')}${content}`, { label: 'Attribute Class Overview', nofocus: true });
 }
 function masteryModal(id) {
   const h = S.habits.find(x => x.id === id); if (!h) return;
@@ -1088,6 +1111,7 @@ document.addEventListener('click', (e) => {
     case 'settings-open': settingsSub = d.v; render(); $('#scroll').scrollTop = 0; break;
     case 'settings-back': settingsSub = null; render(); break;
     case 'shop-open': view='home'; homeTab='bonus'; bonusSub='themes'; render(); break;
+    case 'class-overview': classOverviewModal(); break;
     case 'rules': view = 'rules'; render(); $('#scroll').scrollTop = 0; break;
     case 'rules-back': view = 'home'; render(); break;
     case 'rules-ack': S.meta.rulesSeen = true; S.meta.rulesVersion = '2.4.0'; save(); view = 'home'; render(); break;
@@ -1203,7 +1227,10 @@ document.addEventListener('input', (e) => {
   else if (k === 's-name' || k === 's-desc') { syncDraftText(); const a = $('#s-ncnt'), b = $('#s-dcnt'); if (a) a.textContent = `${draft.name.length}/50`; if (b) b.textContent = `${draft.desc.length}/100`; }
   else if (k === 'title-search') { titleQuery = e.target.value; const l = $('#title-list'); if (l) { const ctx = G.context(S, today()), eq = currentTitle(); let list = G.TITLES.map(t => ({ t, at: S.unlocked.titles[t.id] })); if (titleCat !== 'All') list = list.filter(x => x.t.cat === titleCat); if (titleFilter === 'unlocked') list = list.filter(x => x.at); else if (titleFilter === 'locked') list = list.filter(x => !x.at); else if (titleFilter === 'equipped') list = list.filter(x => eq && x.t.id === eq.id); const q = titleQuery.trim().toLowerCase(); if (q) list = list.filter(x => (x.t.name + ' ' + x.t.desc + ' ' + x.t.cat).toLowerCase().includes(q)); l.innerHTML = titleRows(list, ctx, eq); } }
 });
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#layer .sheet') && !HA.Notice.busy) closeSheet(); });
+document.addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.closest && e.target.closest('[data-act="class-overview"]')) { e.preventDefault(); classOverviewModal(); }
+  else if (e.key === 'Escape' && $('#layer .sheet') && !HA.Notice.busy) closeSheet();
+});
 
 let cropPointers=new Map(), cropGesture=null;
 document.addEventListener('pointerdown',e=>{if(!photoDraft||!e.target.closest('#photo-crop'))return;e.preventDefault();e.target.setPointerCapture(e.pointerId);cropPointers.set(e.pointerId,{x:e.clientX,y:e.clientY});if(cropPointers.size===1)cropGesture={x:e.clientX,y:e.clientY,ox:photoDraft.x,oy:photoDraft.y,zoom:photoDraft.zoom};else{const p=[...cropPointers.values()];cropGesture={distance:Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y),zoom:photoDraft.zoom};}});

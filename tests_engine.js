@@ -20,9 +20,27 @@ assert(G.levelInfo(1e9).level === 100 && G.levelInfo(1e9).max, 'max level 100');
 assert(!G.RANKS.some(r => 'mult' in r), 'no rank multipliers');
 const rp = G.rankProgress(6820); assert(rp.rank.id === 'C' && rp.next.id === 'B' && rp.nextXP === 14000, 'rank progress: C-Rank toward B at 14,000 XP');
 
-// ---- attribute tiers 0/100/400/900/1600, flat XP
+// ---- attribute tiers 50/100/400/900/1600, flat XP
 let t = G.attrTier('STR', 142); assert(t.name === 'Berserker' && t.no === 2 && t.next === 400 && t.base === 100, 'STR 142 XP = Berserker, tier II, next at 400');
-assert(G.attrTier('STR', 99).name === 'Brawler' && G.attrTier('STR', 100).name === 'Berserker' && G.attrTier('STR', 100).pct === 0, 'bar resets to 0 at each new tier');
+assert(G.attrTier('STR', 0).idx === -1 && G.attrTier('STR', 0).noClass && G.attrTier('STR', 0).name === 'NO CLASS' && G.attrTier('STR', 49).idx === -1, 'STR at zero has no class; below 50 remains before the specific Tier I class');
+assert(G.attrTier('STR', 1).name === 'AWAKENING' && G.attrTier('STR', 1).awakening && G.attrTier('STR', 49).name === 'AWAKENING' && G.attrTier('STR', 32).next === 50, 'first earned Attribute XP unlocks AWAKENING through 49 XP');
+assert(G.attrTier('STR', 50).name === 'Brawler' && G.attrTier('STR', 50).idx === 0 && G.attrTier('STR', 99).name === 'Brawler' && G.attrTier('STR', 100).name === 'Berserker' && G.attrTier('STR', 100).pct === 0, 'STR first class starts at 50 XP and tier II remains at 100 XP');
+assert(G.CONST.ATTR_TIER_STARTS.join(',') === '50,100,400,900,1600', 'only tier I threshold changed; all later Attribute thresholds remain unchanged');
+{ const S = Store.defaults(), ax = G.attrXP(S); assert(G.ATTR_ORDER.every(a => ax[a] === 0 && G.attrTier(a, ax[a]).idx === -1), 'new users begin with zero Attribute XP and no achieved classes'); }
+for (const a of G.ATTR_ORDER) {
+  assert(G.attrTier(a, 0).noClass && G.attrTier(a, 1).name === 'AWAKENING' && G.attrTier(a, 49).name === 'AWAKENING' && G.attrTier(a, 50).idx === 0 && G.attrTier(a, 99).idx === 0 && G.attrTier(a, 100).idx === 1, `${a} follows 0 no class, 1–49 Awakening, 50 tier I, 100 tier II`);
+}
+assert(G.newAttributeClassUnlocks({ STR: 0 }, { STR: 0 }).length === 0 && G.newAttributeClassUnlocks({ STR: 0 }, { STR: 1 }).map(x => x.name).join() === 'AWAKENING' && G.newAttributeClassUnlocks({ STR: 1 }, { STR: 49 }).length === 0, 'AWAKENING notification fires on first XP only');
+assert(G.newAttributeClassUnlocks({ STR: 0 }, { STR: 49 }).map(x => x.name).join() === 'AWAKENING' && G.newAttributeClassUnlocks({ STR: 49 }, { STR: 50 }).map(x => `${x.idx}:${x.name}`).join() === '0:Brawler', 'class achievement events fire only when Awakening or Tier I is crossed');
+assert(G.newAttributeClassUnlocks({ STR: 50 }, { STR: 50 }).length === 0 && G.newAttributeClassUnlocks({ STR: 50 }, { STR: 99 }).length === 0 && G.newAttributeClassUnlocks({ STR: 99 }, { STR: 100 }).map(x => `${x.idx}:${x.name}`).join() === '1:Berserker', 'no repeated notice without a new class; tier II event fires at 100 XP');
+assert(G.newAttributeClassUnlocks({ STR: 0 }, { STR: 110 }).map(x => x.name).join() === 'AWAKENING,Brawler,Berserker' && G.newAttributeClassUnlocks({ STR: 40 }, { STR: 110 }).map(x => x.idx).join() === '0,1', 'crossing multiple Attribute thresholds reports every newly unlocked class once');
+const overviewXp = { STR: 150, INT: 100, VIT: 75, PER: 32, CHA: 8 };
+assert(G.sortAttributesByXP(overviewXp).join() === 'STR,INT,VIT,PER,CHA', 'Attribute Overview sort orders current XP descending');
+assert(G.sortAttributesByXP({ ...overviewXp, INT: 180 }).join() === 'INT,STR,VIT,PER,CHA', 'Attribute Overview order updates when XP changes');
+assert(G.sortAttributesByXP({ ...overviewXp, INT: 180, PER: 200 }).join() === 'PER,INT,STR,VIT,CHA', 'highest XP Attribute moves to the top dynamically');
+assert(G.sortAttributesByXP({ STR: 0, VIT: 0, INT: 0, PER: 0, CHA: 0 }).join() === 'STR,VIT,INT,PER,CHA', 'equal XP keeps the fixed STR/VIT/INT/PER/CHA order');
+assert(G.sortAttributesByXP({ STR: 50, INT: 50, VIT: 25, PER: 10, CHA: 10 }).join() === 'STR,INT,VIT,PER,CHA', 'equal-XP ties use fixed attribute order');
+assert(G.sortAttributesByXP(overviewXp).map(a => `${a}:${overviewXp[a]}`).join('|') === 'STR:150|INT:100|VIT:75|PER:32|CHA:8', 'sorting preserves each Attribute ID and its XP association');
 assert(G.attrTier('STR', 1600).max && G.attrTier('STR', 1600).name === 'Titan', '1600 XP = Titan (max)');
 assert(G.attrTier('INT', 900).name === 'Sage' && G.attrTier('VIT', 400).name === 'Bastion' && G.attrTier('PER', 400).name === 'Pathfinder' && G.attrTier('CHA', 900).name === 'Commander', 'class names per image');
 assert([0,50,150,400,700,1000,2500].every((xp,i)=>G.masteryTier(xp).name===G.MASTERY[i]) && G.MASTERY.join('|')==='Awakened|Forged|Hunter|Veteran|Elite|Apex|Ascendant', 'seven Habit Mastery names and locked thresholds');
@@ -54,7 +72,7 @@ assert(maxy.level >= 89 && maxy.level <= 91, 'maximum effort for a year lands on
 let c = G.classInfo({ STR: 400, VIT: 380, INT: 0, PER: 0, CHA: 0 }); assert(c.versatile && c.attr === 'STR', 'versatile when runner-up within 10%');
 c = G.classInfo({ STR: 400, VIT: 200, INT: 0, PER: 0, CHA: 0 }); assert(!c.versatile, 'not versatile with a big gap');
 c = G.classInfo({ STR: 60, VIT: 60, INT: 0, PER: 0, CHA: 0 }); assert(!c.versatile, 'not versatile below tier II');
-c = G.classInfo({ STR: 0, VIT: 0, INT: 0, PER: 0, CHA: 0 }); assert(!c.versatile && c.name === 'Brawler', 'empty state -> Brawler');
+c = G.classInfo({ STR: 0, VIT: 0, INT: 0, PER: 0, CHA: 0 }); assert(!c.versatile && c.name === 'NO CLASS', 'empty state has no default Attribute Class');
 { const eq=G.normalizeAttrDistribution({STR:5,VIT:5,INT:5,PER:5,CHA:5}); assert(G.ATTR_ORDER.every(a=>eq[a]===1),'equal attributes normalize to a balanced outer pentagon'); }
 { const v=G.normalizeAttrDistribution({STR:10,VIT:5,INT:5,PER:5,CHA:5}); assert(v.STR===1&&v.VIT===.5&&v.INT===.5&&v.PER===.5&&v.CHA===.5,'STR-dominant distribution normalizes against the current maximum'); }
 { const v=G.normalizeAttrDistribution({STR:400,VIT:200,INT:800,PER:100,CHA:300}),expected={STR:.5,VIT:.25,INT:1,PER:.125,CHA:.375}; assert(G.ATTR_ORDER.every(a=>v[a]===expected[a]),'INT-dominant distribution preserves relative proportions'); }
@@ -127,6 +145,9 @@ assert(G.ACHIEVEMENTS.length === 25, '25 achievements'); assert(G.TITLES.length 
  const home=(app.match(/function homeHTML\(\) \{([\s\S]*?)\n\}/)||[])[1]||'';
  assert(!home.includes('help-shortcut')&&!home.includes('aria-label="Hunter\'s Rules"')&&home.includes('rulesHomeCard()'),'Home has no Rules shortcut and retains the first-run Rules card');
  assert(app.includes('relative=G.normalizeAttrDistribution(attrXp)')&&app.includes('attrXp=G.attrXP(S)')&&app.includes('scale=G.CONST.ATTR_TIER_STARTS[4]')&&app.includes('Scale: 0–${fmt(scale)} XP'),'Versatility uses authoritative XP, relative geometry and fixed 1,600 XP reference');
+ assert(app.includes('G.newAttributeClassUnlocks(before.attrXp, after.attrXp)')&&app.includes("title: 'ATTRIBUTE CLASS ACHIEVED'")&&app.includes('Attribute Class AWAKENING unlocked.')&&app.includes('Attribute Class Tier ${G.TIER_ROMAN[idx]} unlocked.'),'Attribute class notices use real XP crossings and the existing System Notice queue');
+ assert(app.includes('data-act="class-overview"')&&app.includes('function classOverviewModal()')&&app.includes('Individual progression across all five Attributes'),'Home class control opens an overview of all five independent Attributes');
+ assert(app.includes('G.sortAttributesByXP(ax).map(a => {')&&app.includes('const A = G.ATTRS[a], xp = ax[a], t = G.attrTier(a, xp);'),'Overview sorts Attribute IDs while rendering each section from its own current XP');
  assert(app.includes('Settings · ${esc(settingsSub)}')&&app.includes('"Hunter\'s Rules"'),'Hunter\'s Rules remains accessible from Settings');
  assert(fs.readFileSync(path.join(__dirname,'sw.js'),'utf8').includes("'./manifest.json'")&&fs.readFileSync(path.join(__dirname,'sw.js'),'utf8').includes("'./icons/icon-512.png'"),'service worker precaches relative manifest and app icon');}
 // ---- Daily Mission repeat (a fixed time every day)

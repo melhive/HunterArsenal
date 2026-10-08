@@ -13,7 +13,7 @@
     HUNTER_XP: 10, ATTR_XP: 5, MASTERY_XP: 5,
     // [level, total Hunter XP at the start of that level]; levels in between are interpolated.
     LEVEL_ANCHORS: [[1, 0], [13, 1500], [30, 6000], [50, 14000], [70, 25000], [90, 38000], [100, 48000]],
-    ATTR_TIER_STARTS: [0, 100, 400, 900, 1600],               // attribute XP where tiers I..V begin
+    ATTR_TIER_STARTS: [50, 100, 400, 900, 1600],              // attribute XP where tiers I..V begin
     MASTERY_STARTS: [0, 50, 150, 400, 700, 1000, 2500],        // Awakened..Ascendant (Elite value is provisional)
     FREEZE_CAP: 10,
     FREEZE_MILESTONES: [[3, 1], [7, 2], [30, 5]], FREEZE_EVERY: 30, FREEZE_EVERY_REWARD: 5,
@@ -48,6 +48,7 @@
            classes: ['Speaker', 'Charmer', 'Luminary', 'Commander', 'Sovereign'] }
   };
   const TIER_ROMAN = ['I', 'II', 'III', 'IV', 'V'];
+  const ATTR_AWAKENING = 'AWAKENING';
 
   const MASTERY = ['Awakened', 'Forged', 'Hunter', 'Veteran', 'Elite', 'Apex', 'Ascendant'];
   const LEGACY_MASTERY = Object.freeze({ INITIATED:'Awakened', CALIBRATED:'Forged', PROFICIENT:'Hunter', QUALIFIED:'Veteran', ADVANCED:'Elite', EXPERT:'Apex', AUTHORITY:'Ascendant' });
@@ -106,7 +107,27 @@
       pct: max ? 100 : ((xp - base) / Math.max(1, next - base)) * 100
     };
   }
-  const attrTier = (attr, xp) => tierProgress(xp, CONST.ATTR_TIER_STARTS, ATTRS[attr].classes);
+  const attrTier = (attr, xp) => {
+    xp = Math.max(0, Math.floor(xp));
+    if (xp === 0) return { idx: -1, max: false, xp, base: 0, next: 1, no: 0, name: 'NO CLASS', nextName: ATTR_AWAKENING, noClass: true, awakening: false, pct: 0 };
+    if (xp < CONST.ATTR_TIER_STARTS[0]) return {
+      idx: -1, max: false, xp, base: 1, next: CONST.ATTR_TIER_STARTS[0], no: 0,
+      name: ATTR_AWAKENING, nextName: ATTRS[attr].classes[0], noClass: false, awakening: true,
+      pct: (xp / CONST.ATTR_TIER_STARTS[0]) * 100
+    };
+    return Object.assign(tierProgress(xp, CONST.ATTR_TIER_STARTS, ATTRS[attr].classes), { noClass: false, awakening: false });
+  };
+  const newAttributeClassUnlocks = (before, after) => ATTR_ORDER.flatMap(attr => {
+    const fromXp = Math.max(0, Math.floor(before[attr] || 0)), toXp = Math.max(0, Math.floor(after[attr] || 0));
+    const from = attrTier(attr, fromXp).idx, to = attrTier(attr, toXp).idx;
+    const unlocked = [];
+    if (fromXp < 1 && toXp >= 1) unlocked.push({ attr, idx: -1, name: ATTR_AWAKENING, awakening: true });
+    for (let idx = from + 1; idx <= to; idx++) unlocked.push({ attr, idx, name: ATTRS[attr].classes[idx] });
+    return unlocked;
+  });
+  const sortAttributesByXP = attrXp => ATTR_ORDER.slice().sort((a, b) =>
+    ((attrXp[b] || 0) - (attrXp[a] || 0)) || ATTR_ORDER.indexOf(a) - ATTR_ORDER.indexOf(b)
+  );
   const masteryTier = xp => tierProgress(xp, CONST.MASTERY_STARTS, MASTERY);
 
   function classInfo(attrXp) {
@@ -482,8 +503,8 @@
   }
 
   HA.Game = {
-    CONST, RANKS, ATTRS, ATTR_ORDER, TIER_ROMAN, MASTERY, LEGACY_MASTERY, ACHIEVEMENTS, TITLES, TITLE_CATS, CHALLENGES, THEMES, COSMETICS,
-    keyOf, parseKey, addDays, todayKey, levelNeed, LEVEL_START, levelInfo, rankForLevel, rankStartXP, rankProgress, tierProgress, attrTier, masteryTier, classInfo,
+    CONST, RANKS, ATTRS, ATTR_ORDER, ATTR_AWAKENING, TIER_ROMAN, MASTERY, LEGACY_MASTERY, ACHIEVEMENTS, TITLES, TITLE_CATS, CHALLENGES, THEMES, COSMETICS,
+    keyOf, parseKey, addDays, todayKey, levelNeed, LEVEL_START, levelInfo, rankForLevel, rankStartXP, rankProgress, tierProgress, attrTier, newAttributeClassUnlocks, sortAttributesByXP, masteryTier, classInfo,
     activeHabits, habitScheduledOn, scheduledHabits, dayRec, totalXP, attrXP, normalizeAttrDistribution, masteryXPMap, habitStats, refreshDay, processDays, toggleHabit,
     skillXP, practiceSkill, dqCanSchedule, dqSchedule, dqSetRepeat, dqStopRepeat, dqNextAt, TIME_RE, dqTick, dqAccept, dqDecline, declareRestDay, context, checkUnlocks, hcBalance, themeStatus, getHunterCardData
   };
