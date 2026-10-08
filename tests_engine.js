@@ -7,6 +7,17 @@ for (const f of ['version', 'gamification', 'storage']) vm.runInContext(fs.readF
 const { Game: G, Store } = ctx.HA;
 let fails = 0; const assert = (c, m) => { if (!c) { fails++; console.error('FAIL', m); } else console.log('ok  ', m); };
 const mk = (id, attr, created) => ({ id, name: id, desc: '', icon: 'target', attr, days: null, created: created || '2026-01-01', archived: false });
+function isolatedStore(initial = {}, sharedData = null) {
+  const data = sharedData || { ...initial }, flags = { failGet: false, failSet: false, failRemove: false, failGetOnCall: 0, failSetOnCall: 0, replaceOnGetCall: 0, replaceValue: null, getCalls: 0, setCalls: 0 };
+  const c = { console: { warn() {} }, crypto: require('crypto').webcrypto, localStorage: {
+    getItem(k) { flags.getCalls++; if (flags.replaceOnGetCall === flags.getCalls) data[k] = flags.replaceValue; if (flags.failGet || flags.failGetOnCall === flags.getCalls) throw new Error('read blocked'); return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
+    setItem(k, v) { flags.setCalls++; if (flags.failSet || flags.failSetOnCall === flags.setCalls) throw new Error('write blocked'); data[k] = String(v); },
+    removeItem(k) { if (flags.failRemove) throw new Error('remove blocked'); delete data[k]; }
+  } };
+  c.self = c; c.window = c; vm.createContext(c);
+  for (const f of ['version', 'gamification', 'storage']) vm.runInContext(fs.readFileSync(path.join(__dirname, 'js', f + '.js'), 'utf8'), c, { filename: `isolated-${f}` });
+  return { c, data, flags, Store: c.HA.Store, Game: c.HA.Game };
+}
 assert(Store.defaults().v===4&&Store.defaults().settings.penalties===true&&Store.defaults().settings.autoFreeze===true,'v2.4 defaults enable penalties and automatic Streak Freeze');
 
 // ---- levels & ranks: the Core Progression anchors
@@ -78,17 +89,208 @@ c = G.classInfo({ STR: 0, VIT: 0, INT: 0, PER: 0, CHA: 0 }); assert(!c.versatile
 { const v=G.normalizeAttrDistribution({STR:400,VIT:200,INT:800,PER:100,CHA:300}),expected={STR:.5,VIT:.25,INT:1,PER:.125,CHA:.375}; assert(G.ATTR_ORDER.every(a=>v[a]===expected[a]),'INT-dominant distribution preserves relative proportions'); }
 { const v=G.normalizeAttrDistribution({STR:0,VIT:0,INT:0,PER:0,CHA:0}); assert(G.ATTR_ORDER.every(a=>v[a]===0&&Number.isFinite(v[a])),'zero attributes remain centered without division by zero'); }
 
-// ---- hostile import is neutralised
+// ---- hostile import is rejected before normalization can discard or rewrite data
 const evil = { app: 'HunterArsenal', data: { habits: Array.from({ length: 12 }, (_, i) => ({ id: 'x' + i, name: '<img src=x onerror=alert(1)>', attr: 'HAX', icon: '../../x', days: [9, -1] })), completions: { '2026-01-01': { x0: { xp: 999999, ax: 1e9, attr: 'STR' } } }, profile: { name: 'A'.repeat(500), avatar: 'javascript:alert(1)' }, unlocked: { titles: { nope: 1 } }, settings: { theme: '<script>' } } };
-const clean = Store.importJSON(JSON.stringify(evil));
-assert(clean.habits[0].attr === 'STR' && clean.habits[0].icon === 'target', 'hostile habit fields sanitised');
-assert(clean.habits.filter(h => !h.archived).length === 8, 'more than 8 active habits are capped at 8');
-assert(clean.completions['2026-01-01'].x0.xp === 10 && clean.completions['2026-01-01'].x0.ax === 5, 'tampered XP values are reset to the fixed amounts');
-assert(clean.profile.name.length === 24 && clean.profile.avatar === null && clean.settings.theme === 'default' && !clean.unlocked.titles.nope, 'profile/theme/unlock ids sanitised');
-{const legacy=Store.sanitize({v:3,profile:{name:'Existing Hunter',equippedTitle:'first',hunterId:'HA-ABCD-EFGH'},settings:{theme:'forest',sound:true,penalties:false},dailyQuest:{state:'scheduled',repeat:'07:15'},streak:{freezes:3,combo:12,best:20,processed:'2026-01-01'},purchases:[{id:'forest',cost:250,at:5}]});assert(legacy.profile.name==='Existing Hunter'&&legacy.settings.theme==='forest'&&legacy.settings.sound&&legacy.settings.penalties&&legacy.settings.autoFreeze&&legacy.dailyQuest.repeat==='07:15'&&legacy.streak.freezes===3&&legacy.purchases.some(p=>p.id==='forest'),'v3 settings, mission schedule, freeze bank, Hunter Credit purchase and profile survive migration');}
-{const C=Store.sanitize({v:4,settings:{border:'border-cyan',namePlate:'plate-elite'},purchases:[{id:'border-cyan',cost:180,at:1},{id:'plate-elite',cost:240,at:2}]});assert(C.settings.border==='border-cyan'&&C.settings.namePlate==='plate-elite'&&G.hcBalance(C).spent===420,'cosmetic ownership and equipped items survive sanitize/load');}
-store['hunterarsenal.v2'] = JSON.stringify({ habits: [{ id: 'old', name: 'Old', attr: 'INT', diff: 'hard' }], completions: { '2026-01-01': { old: { xp: 15, base: 15, attr: 'INT' } } } });
-const mig = Store.load(); assert(mig.habits[0].id === 'old' && G.totalXP(mig) === 10 && store['hunterarsenal.v3'], 'v2 data migrates to flat XP and is saved under the v3 key');
+let evilRejected = false; try { Store.importJSON(JSON.stringify(evil)); } catch (e) { evilRejected = true; }
+assert(evilRejected, 'hostile or incomplete backup is rejected instead of silently normalized');
+{const legacy=Store.defaults();legacy.v=3;legacy.profile.name='Existing Hunter';legacy.profile.equippedTitle='first';legacy.profile.hunterId='HA-ABCD-EFGH';legacy.settings.theme='forest';legacy.settings.sound=true;legacy.settings.penalties=false;legacy.dailyQuest.state='scheduled';legacy.dailyQuest.repeat='07:15';legacy.streak.freezes=3;legacy.streak.combo=12;legacy.streak.best=20;legacy.streak.processed='2026-01-01';legacy.purchases=[{id:'forest',cost:250,at:5}];delete legacy.streak.milestones;const state=Store.importJSON(JSON.stringify({app:'HunterArsenal',data:legacy}));assert(state.profile.name==='Existing Hunter'&&state.settings.theme==='forest'&&state.settings.sound&&!state.settings.penalties&&state.settings.autoFreeze&&state.dailyQuest.repeat==='07:15'&&state.streak.freezes===3&&state.purchases.some(p=>p.id==='forest'),'v3 migration preserves profile, user-selected penalties, mission schedule, freeze bank, and HC purchase');}
+{const C=Store.defaults();C.settings.border='border-cyan';C.settings.namePlate='plate-elite';C.purchases=[{id:'border-cyan',cost:180,at:1},{id:'plate-elite',cost:240,at:2}];const state=Store.importJSON(JSON.stringify({app:'HunterArsenal',data:C}));assert(state.settings.border==='border-cyan'&&state.settings.namePlate==='plate-elite'&&G.hcBalance(state).spent===420,'cosmetic ownership and equipped items survive validated normalization');}
+const legacyV2=Store.defaults();delete legacyV2.v;legacyV2.habits=[mk('old','INT')];legacyV2.completions={'2026-01-01':{old:{xp:10,base:10,attr:'INT',at:1}}};
+store['hunterarsenal.v2'] = JSON.stringify(legacyV2);
+const mig = Store.load(); assert(mig.habits[0].id === 'old' && G.totalXP(mig) === 10 && store['hunterarsenal.v3'], 'complete v2 data migrates and is saved under the current key');
+
+// ---- fail-safe storage, recovery, imports, migration, and explicit reset
+{
+  const x = isolatedStore(), fresh = x.Store.load();
+  assert(fresh && fresh.v === 4 && !x.Store.isRecoveryRequired() && !x.data['hunterarsenal.v3'], 'no saved data produces in-memory defaults without recovery');
+  assert(x.Store.save(fresh) && x.data['hunterarsenal.v3'], 'a valid initial state can be saved');
+  fresh.profile.name = 'Existing Hunter'; fresh.habits.push(vm.runInContext(`JSON.parse(${JSON.stringify(JSON.stringify(mk('saved', 'INT')))})`, x.c)); fresh.streak.combo = 9;
+  assert(x.Store.save(fresh), 'valid candidate save succeeds');
+  const loaded = x.Store.load();
+  assert(loaded.profile.name === 'Existing Hunter' && loaded.habits[0].id === 'saved' && loaded.streak.combo === 9, 'valid existing progress survives load/save');
+  loaded.habits.push(vm.runInContext(`JSON.parse(${JSON.stringify(JSON.stringify(mk('active', 'STR')))})`, x.c));
+  x.Game.toggleHabit(loaded, 'active', '2026-10-08', Date.now()); x.Game.refreshDay(loaded, '2026-10-08');
+  assert(x.Store.save(loaded), 'ordinary habit completion and its daily record pass current-schema validation');
+}
+{
+  const raw = '{bad saved json', x = isolatedStore({ 'hunterarsenal.v3': raw });
+  assert(x.Store.load() === null && x.Store.isRecoveryRequired(), 'malformed JSON activates recovery instead of returning defaults');
+  assert(x.data['hunterarsenal.v3'] === raw, 'malformed original raw record remains unchanged');
+  assert(!x.Store.save(x.Store.defaults()) && x.data['hunterarsenal.v3'] === raw, 'normal save is blocked during corrupt-record recovery');
+  assert(x.Store.load() === null && x.data['hunterarsenal.v3'] === raw, 'repeated recovery startup does not overwrite corrupted data');
+  const exported = JSON.parse(x.Store.exportRecovery());
+  assert(exported.records.some(r => r.key === 'hunterarsenal.v3' && r.raw === raw), 'recovery export preserves the original raw record');
+  const restarted = isolatedStore(x.data);
+  assert(restarted.Store.load() === null && restarted.Store.isRecoveryRequired() && restarted.data['hunterarsenal.v3'] === raw, 'a fresh app instance remains in recovery after restart without overwriting the corrupt record');
+}
+{
+  const x = isolatedStore({ 'hunterarsenal.v3': JSON.stringify({ v: 4, habits: {} }) });
+  assert(x.Store.load() === null && x.Store.recoveryInfo().reason === 'invalid-saved-record', 'structurally invalid current state enters recovery');
+  const x2 = isolatedStore({ 'hunterarsenal.v3': JSON.stringify({ v: 4, habits: [], profile: null }) });
+  assert(x2.Store.load() === null && x2.Store.isRecoveryRequired(), 'invalid required nested structure enters recovery');
+  const missing = isolatedStore({ 'hunterarsenal.v3': JSON.stringify({ v: 4, habits: [], profile: {}, settings: {} }) });
+  assert(missing.Store.load() === null && missing.Store.isRecoveryRequired(), 'incomplete current schema is not silently filled with defaults');
+  const partialV3 = Store.defaults(); partialV3.v = 3; partialV3.profile = {};
+  const partial = isolatedStore({ 'hunterarsenal.v3': JSON.stringify(partialV3) });
+  assert(partial.Store.load() === null && partial.Store.isRecoveryRequired() && partial.data['hunterarsenal.v3'] === JSON.stringify(partialV3), 'incomplete v3 profile is preserved and enters recovery instead of becoming Hunter');
+}
+{
+  const legacyState = Store.defaults(); delete legacyState.v; legacyState.habits = [mk('legacy', 'VIT')];
+  const legacy = JSON.stringify(legacyState), x = isolatedStore({ 'hunterarsenal.v2': legacy });
+  x.flags.failSet = true;
+  assert(x.Store.load() === null && x.Store.isRecoveryRequired(), 'failed v2 migration enters recovery');
+  assert(x.data['hunterarsenal.v2'] === legacy && !x.data['hunterarsenal.v3'], 'failed migration preserves its source and does not create a default current record');
+  x.flags.failSet = false;
+  const migrated = x.Store.load();
+  assert(migrated.habits[0].id === 'legacy' && migrated.v === 4 && JSON.parse(x.data['hunterarsenal.v3']).habits[0].id === 'legacy', 'migration safely retries and commits validated output');
+}
+{
+  const largeLegacy = Store.defaults(); delete largeLegacy.v;
+  largeLegacy.habits = Array.from({ length: 201 }, (_, i) => ({ id: `lh${i}`, name: `Legacy ${i}`, desc: '', icon: 'target', attr: 'STR', days: null, created: '2026-01-01', archived: true }));
+  const raw = JSON.stringify(largeLegacy), x = isolatedStore({ 'hunterarsenal.v2': raw });
+  const migrated = x.Store.load();
+  assert(migrated && migrated.habits.length === 201 && JSON.parse(x.data['hunterarsenal.v3']).habits.length === 201, 'oversized legacy Habit data migrates without truncation');
+  const incomplete = JSON.parse(raw); incomplete.profile = {};
+  const bad = JSON.stringify(incomplete), y = isolatedStore({ 'hunterarsenal.v2': bad });
+  assert(y.Store.load() === null && y.Store.isRecoveryRequired() && y.data['hunterarsenal.v2'] === bad && !y.data['hunterarsenal.v3'], 'incomplete v2 data is preserved in recovery without default-filled migration');
+}
+{
+  const legacy = Store.defaults(); legacy.v = 3; delete legacy.streak.milestones;
+  legacy.completions = { '2026-01-01': { old: { xp: G.CONST.HUNTER_XP + 5, ax: G.CONST.ATTR_XP, mx: G.CONST.MASTERY_XP, attr: 'STR', at: 1 } } };
+  const raw = JSON.stringify(legacy), x = isolatedStore({ 'hunterarsenal.v3': raw });
+  assert(x.Store.load() === null && x.Store.isRecoveryRequired() && x.data['hunterarsenal.v3'] === raw, 'migration rejects non-canonical historical XP rather than rewriting earned values');
+}
+{
+  const x = isolatedStore(), legacy3 = x.Store.defaults(); legacy3.v = 3; legacy3.profile.name = 'Legacy Profile'; legacy3.streak.combo = 7; delete legacy3.streak.milestones;
+  x.data['hunterarsenal.v3'] = JSON.stringify(legacy3);
+  const migrated = x.Store.load();
+  assert(migrated && migrated.v === 4 && migrated.profile.name === 'Legacy Profile' && migrated.streak.milestones.includes(7), 'valid schema v3 state migrates and preserves existing profile and streak progress');
+}
+{
+  const oldState = Store.defaults(); oldState.v = 3; delete oldState.streak.milestones;
+  const old = isolatedStore({ 'hunterarsenal.v3': JSON.stringify(oldState) });
+  const randomValues = old.c.crypto.getRandomValues;
+  old.c.crypto.getRandomValues = () => { throw new Error('crypto failed'); };
+  assert(old.Store.load() === null && old.Store.isRecoveryRequired(), 'sanitization failure activates recovery');
+  old.c.crypto.getRandomValues = randomValues;
+  const x = isolatedStore(), S = x.Store.load(); x.Store.save(S); const original = x.data['hunterarsenal.v3'];
+  x.flags.failSet = true;
+  assert(!x.Store.save(S) && x.Store.isRecoveryRequired(), 'storage write failure is reported and activates recovery');
+  assert(x.data['hunterarsenal.v3'] === original, 'failed storage write preserves the last known-good record');
+}
+{
+  const x = isolatedStore(), validHabit = (i, archived = true) => ({ id: `h${i}`, name: `Habit ${i}`, desc: '', icon: 'target', attr: 'STR', days: null, created: '2026-01-01', archived });
+  const validSkill = i => ({ id: `s${i}`, name: `Skill ${i}`, desc: '', icon: 'book', attr: 'INT', created: '2026-01-01' });
+  const importState = state => x.Store.importJSON(JSON.stringify({ app: 'HunterArsenal', data: state }));
+  const habits = x.Store.defaults(); habits.habits = Array.from({ length: 201 }, (_, i) => validHabit(i));
+  let candidate = importState(habits);
+  assert(candidate.habits.length === 201, '201 valid Habits remain intact through backup import');
+  assert(x.Store.restore(candidate).ok && JSON.parse(x.data['hunterarsenal.v3']).habits.length === 201, '201 Habits remain intact through restore and persistence');
+
+  const skills = x.Store.defaults(); skills.skills = Array.from({ length: 101 }, (_, i) => validSkill(i));
+  assert(importState(skills).skills.length === 101, '101 valid Skills remain intact through import');
+
+  const logs = x.Store.defaults(); logs.skills = [validSkill(0)];
+  logs.skillLog = Array.from({ length: 20001 }, (_, i) => ({ id: 's0', d: '2026-01-01', xp: G.CONST.PRACTICE_XP, at: i }));
+  assert(importState(logs).skillLog.length === 20001, '20,001 Skill history records remain intact through import');
+
+  const completions = x.Store.defaults(), day = {};
+  for (let i = 0; i < 60001; i++) day[`c${i}`] = { xp: G.CONST.HUNTER_XP, ax: G.CONST.ATTR_XP, mx: G.CONST.MASTERY_XP, attr: 'STR', at: i };
+  completions.completions = { '2026-01-01': day };
+  assert(Object.keys(importState(completions).completions['2026-01-01']).length === 60001, '60,001 completion records remain intact through import');
+
+  const purchases = x.Store.defaults(), cosmetic = G.COSMETICS.find(c => c.type === 'border');
+  purchases.purchases = Array.from({ length: 101 }, (_, i) => ({ id: cosmetic.id, cost: cosmetic.cost, at: i }));
+  assert(importState(purchases).purchases.length === 101, '101 valid purchase records remain intact through import');
+
+  const before = x.data['hunterarsenal.v3'], malformed = x.Store.defaults();
+  malformed.habits.push({ ...validHabit(300), name: ' padded ' });
+  let rejected = false; try { importState(malformed); } catch (e) { rejected = true; }
+  assert(rejected && x.data['hunterarsenal.v3'] === before, 'malformed import is rejected without replacing current data');
+  const unknown = x.Store.defaults(); unknown.profile.userNote = 'keep me';
+  rejected = false; try { importState(unknown); } catch (e) { rejected = true; }
+  assert(rejected && x.data['hunterarsenal.v3'] === before, 'unsupported unknown fields are rejected rather than silently dropped');
+  const activeOverflow = x.Store.defaults(); activeOverflow.habits = Array.from({ length: 9 }, (_, i) => validHabit(i, false));
+  rejected = false; try { importState(activeOverflow); } catch (e) { rejected = true; }
+  assert(rejected && x.data['hunterarsenal.v3'] === before, 'active Habit limit is enforced by safe rejection, not auto-archiving');
+  const operator = x.Store.defaults(); operator.profile.name = 'Operator';
+  assert(importState(operator).profile.name === 'Operator', 'a persisted profile name is not rewritten to a product default');
+}
+{
+  const x = isolatedStore(), S = x.Store.load(); x.Store.save(S);
+  const old = x.data['hunterarsenal.v3'];
+  assert(!x.Store.save({ v: 4, habits: [] }) && x.data['hunterarsenal.v3'] === old, 'invalid candidate state cannot replace a valid saved record');
+  const badRead = isolatedStore({ 'hunterarsenal.v3': '{read error preserved' }); badRead.flags.failGet = true;
+  assert(badRead.Store.load() === null && badRead.Store.isRecoveryRequired() && !badRead.Store.save(badRead.Store.defaults()), 'storage read errors enter recovery and block writes');
+}
+{
+  const x = isolatedStore(), S = x.Store.load(); x.Store.save(S); const old = x.data['hunterarsenal.v3'];
+  vm.runInContext("JSON.stringify = () => { throw new Error('serialization failed'); }", x.c);
+  const ok = x.Store.save(S);
+  assert(!ok && x.data['hunterarsenal.v3'] === old && x.Store.isRecoveryRequired(), 'serialization failure preserves prior storage and enters recovery');
+}
+{
+  const x = isolatedStore(), S = x.Store.load(); assert(x.Store.save(S), 'verification-read test baseline saved');
+  const before = x.data['hunterarsenal.v3']; x.flags.failGetOnCall = x.flags.getCalls + 2; S.profile.name = 'Verification Failure';
+  assert(!x.Store.save(S) && x.Store.isRecoveryRequired() && x.data['hunterarsenal.v3'] === before, 'verification read failure is not success and rollback restores the prior record');
+}
+{
+  const x = isolatedStore(), S = x.Store.load(); x.Store.save(S);
+  const other = JSON.parse(x.data['hunterarsenal.v3']); other.profile.name = 'Concurrent Tab';
+  const otherRaw = JSON.stringify(other); x.flags.replaceOnGetCall = x.flags.getCalls + 2; x.flags.replaceValue = otherRaw;
+  S.profile.name = 'Current Tab';
+  assert(!x.Store.save(S) && x.Store.isRecoveryRequired() && x.data['hunterarsenal.v3'] === otherRaw, 'verification mismatch preserves the observed concurrent record instead of rolling it back');
+}
+{
+  const x = isolatedStore(), S = x.Store.load(); x.Store.save(S); const before = x.data['hunterarsenal.v3'];
+  x.flags.failGetOnCall = x.flags.getCalls + 2; x.flags.failSetOnCall = x.flags.setCalls + 2; S.profile.name = 'Rollback Failure';
+  assert(!x.Store.save(S) && x.Store.recoveryInfo().reason === 'rollback-failure', 'rollback failure remains in recovery and blocks normal saves');
+  assert(JSON.parse(x.Store.exportRecovery()).records.some(r => r.raw === before), 'rollback failure retains previous bytes for recovery export');
+  const restarted = isolatedStore(x.data), recovered = restarted.Store.load();
+  assert(recovered && recovered.profile.name === 'Rollback Failure', 'restart after rollback failure loads the verified-shape candidate rather than defaults');
+}
+{
+  const shared = {}, tabA = isolatedStore({}, shared), tabB = isolatedStore({}, shared);
+  const stateA = tabA.Store.load(), stateB = tabB.Store.load();
+  assert(tabA.Store.save(stateA), 'first simulated tab establishes its saved record');
+  stateB.profile.name = 'Stale Tab';
+  assert(!tabB.Store.save(stateB) && tabB.Store.isRecoveryRequired() && JSON.parse(shared['hunterarsenal.v3']).profile.name === 'Hunter', 'stale sequential tab save is rejected without overwriting newer data');
+}
+{
+  const x = isolatedStore(), initial = x.Store.load(); x.Store.save(initial);
+  const before = x.data['hunterarsenal.v3'];
+  let invalidRejected = false;
+  try { x.Store.importJSON(JSON.stringify({ app: 'HunterArsenal', data: { v: 4, habits: {} } })); } catch (e) { invalidRejected = true; }
+  assert(invalidRejected && x.data['hunterarsenal.v3'] === before, 'invalid imported backup cannot replace current valid data');
+  const backup = JSON.parse(before); backup.profile.name = 'Backup Hunter';
+  const candidate = x.Store.importJSON(JSON.stringify({ app: 'HunterArsenal', data: backup }));
+  assert(x.data['hunterarsenal.v3'] === before, 'validated import is not persisted before explicit restore');
+  assert(x.Store.restore(candidate).ok && JSON.parse(x.data['hunterarsenal.v3']).profile.name === 'Backup Hunter', 'valid imported backup replaces current state only through restore');
+  const state = x.Store.reset();
+  assert(state.ok && state.state.habits.length === 0 && !x.Store.isRecoveryRequired(), 'explicit reset writes a valid clean state and resolves recovery');
+}
+{
+  const damaged = '{data needs recovery', x = isolatedStore({ 'hunterarsenal.v3': damaged }), backup = x.Store.defaults();
+  x.Store.load();
+  const candidate = x.Store.importJSON(JSON.stringify({ app: 'HunterArsenal', data: backup }));
+  assert(x.data['hunterarsenal.v3'] === damaged && x.Store.isRecoveryRequired(), 'valid backup is staged in memory without overwriting the damaged source');
+  const restored = x.Store.restore(candidate);
+  assert(restored.ok && !x.Store.isRecoveryRequired() && JSON.parse(x.data['hunterarsenal.v3']).v === 4, 'validated backup explicitly resolves recovery and permits later saves');
+  restored.state.profile.name = 'Recovered Hunter';
+  assert(x.Store.save(restored.state) && JSON.parse(x.data['hunterarsenal.v3']).profile.name === 'Recovered Hunter', 'normal validated writes resume only after recovery resolves');
+}
+{
+  const raw = '{preserve me', x = isolatedStore({ 'hunterarsenal.v3': raw }); x.Store.load();
+  x.flags.failSet = true;
+  assert(!x.Store.reset().ok && x.data['hunterarsenal.v3'] === raw && x.Store.isRecoveryRequired(), 'reset write failure does not erase data or exit recovery');
+}
+{
+  const raw = '{preserve me too', x = isolatedStore({ 'hunterarsenal.v3': raw }); x.Store.load();
+  const randomValues = x.c.crypto.getRandomValues;
+  x.c.crypto.getRandomValues = () => { throw new Error('random source unavailable'); };
+  assert(!x.Store.reset().ok && x.data['hunterarsenal.v3'] === raw && x.Store.isRecoveryRequired(), 'reset initialization failure preserves the original record');
+  x.c.crypto.getRandomValues = randomValues;
+}
 
 // ---- Daily Quest cycle
 { const S = Store.defaults(), d = '2026-02-02'; S.habits.push(mk('a', 'STR', '2026-02-01')); S.streak.processed = '2026-02-01';
@@ -136,7 +338,7 @@ for(const [days,reward] of [[3,1],[7,2],[30,5],[60,5],[90,5]]){const S=Store.def
   const card = G.getHunterCardData(S, d); assert(card.level === 1 && card.rank === 'E' && card.rankTitle === 'Provisional Hunter' && card.hunterId.startsWith('HA-'), 'Hunter Card data comes from the single source'); }
 assert(G.ACHIEVEMENTS.length === 25, '25 achievements'); assert(G.TITLES.length === 28 && new Set(G.TITLES.map(x => x.id)).size === 28, '28 titles, unique ids');
 // ---- GitHub Pages PWA prerequisites and settings/rules source contract
-{const app=fs.readFileSync(path.join(__dirname,'js','app.js'),'utf8'),manifest=JSON.parse(fs.readFileSync(path.join(__dirname,'manifest.json'),'utf8'));
+{const app=fs.readFileSync(path.join(__dirname,'js','app.js'),'utf8'),sw=fs.readFileSync(path.join(__dirname,'sw.js'),'utf8'),manifest=JSON.parse(fs.readFileSync(path.join(__dirname,'manifest.json'),'utf8'));
  assert(manifest.name==='HunterArsenal'&&manifest.short_name==='HunterArsenal'&&manifest.display==='standalone'&&manifest.start_url==='./'&&manifest.scope==='./','manifest has standalone display and relative GitHub Pages scope');
  assert(manifest.icons.length>=4&&manifest.icons.every(i=>fs.existsSync(path.join(__dirname,i.src))),'all standard and maskable PWA icons exist');
  assert(['Account','Daily Mission','Appearance','Gameplay','Security','Data & Sync','About'].every(x=>app.includes(`'${x}'`)),'Settings source includes all seven dedicated pages');
@@ -149,7 +351,9 @@ assert(G.ACHIEVEMENTS.length === 25, '25 achievements'); assert(G.TITLES.length 
  assert(app.includes('data-act="class-overview"')&&app.includes('function classOverviewModal()')&&app.includes('Individual progression across all five Attributes'),'Home class control opens an overview of all five independent Attributes');
  assert(app.includes('G.sortAttributesByXP(ax).map(a => {')&&app.includes('const A = G.ATTRS[a], xp = ax[a], t = G.attrTier(a, xp);'),'Overview sorts Attribute IDs while rendering each section from its own current XP');
  assert(app.includes('Settings · ${esc(settingsSub)}')&&app.includes('"Hunter\'s Rules"'),'Hunter\'s Rules remains accessible from Settings');
- assert(fs.readFileSync(path.join(__dirname,'sw.js'),'utf8').includes("'./manifest.json'")&&fs.readFileSync(path.join(__dirname,'sw.js'),'utf8').includes("'./icons/icon-512.png'"),'service worker precaches relative manifest and app icon');}
+ assert(sw.includes("'./manifest.json'")&&sw.includes("'./icons/icon-512.png'"),'service worker precaches relative manifest and app icon');
+ assert(sw.includes('event.respondWith(staleWhileRevalidate(req, event))')&&sw.includes('event.waitUntil(network.then(() => undefined))'),'service worker keeps stale-while-revalidate work alive until cache refresh completes');
+ assert(app.includes("const first = dialog.querySelector(")&&app.includes("if (e.key === 'Tab' && dialog)")&&app.includes('sheetReturnFocus'),'sheets set initial focus, trap keyboard focus, and restore focus to the opener');}
 // ---- Daily Mission repeat (a fixed time every day)
 { const S = Store.defaults(), at = new Date(2026, 5, 10, 7, 0, 0).getTime();            // 10 Jun 07:00 local
   assert(!G.dqSetRepeat(S, '25:99', at) && S.dailyQuest.repeat === null, 'invalid time is rejected');
@@ -165,6 +369,7 @@ assert(G.ACHIEVEMENTS.length === 25, '25 achievements'); assert(G.TITLES.length 
   G.dqTick(S, new Date(2026, 5, 11, 8, 30).getTime()); G.dqDecline(S); G.dqTick(S, new Date(2026, 5, 11, 9, 0).getTime());
   assert(S.dailyQuest.state === 'scheduled' && S.dailyQuest.at === new Date(2026, 5, 12, 8, 30).getTime(), 'declined mission also re-arms for tomorrow');
   G.dqStopRepeat(S); assert(S.dailyQuest.repeat === null && S.dailyQuest.state === 'none', 'turning repeat off clears the schedule');
-  const R = Store.sanitize ? Store.sanitize({ dailyQuest: { state: 'none', repeat: '07:15' } }) : null; if (R) assert(R.dailyQuest.repeat === '07:15', 'repeat survives save/load'); }
+  const repeatState = Store.defaults(); repeatState.dailyQuest.repeat = '07:15';
+  const R = Store.importJSON(JSON.stringify({ app: 'HunterArsenal', data: repeatState })); assert(R.dailyQuest.repeat === '07:15', 'repeat survives validated import/normalization'); }
 
 console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED'); process.exitCode = fails ? 1 : 0;

@@ -98,7 +98,10 @@
   };
 
   HA.Notice = {
-    show(n) { queue.push(Object.assign({ dismissible: false }, n)); next(); },
+    show(n) {
+      if (HA.Store && HA.Store.isRecoveryRequired && HA.Store.isRecoveryRequired() && !(n && n.allowDuringRecovery)) return;
+      queue.push(Object.assign({ dismissible: false }, n)); next();
+    },
     get busy() { return !!active || queue.length > 0; }
   };
   HA.Sound = Sound;

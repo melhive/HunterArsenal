@@ -280,8 +280,10 @@
       body: 'The passcode cannot be recovered. The only way back in is to erase all data on this device and start over. If you have a backup you can restore it afterwards.<br><br>Type <b>ERASE</b> to confirm.',
       fields: [{ id: 'w', label: 'Confirmation', type: 'text' }], validate: x => (x.w.trim().toUpperCase() === 'ERASE' ? '' : 'Type ERASE to confirm.') });
     if (!v) return;
-    try { if (HA.Store && HA.Store.wipe) HA.Store.wipe(); g.localStorage.removeItem('hunterarsenal.v2'); } catch (e) { /* ignore */ }
-    putCfg(null); g.location.reload();
+    const reset = HA.Store && HA.Store.reset ? HA.Store.reset() : null;
+    if (!reset || !reset.ok) { await notify('DATA RESET FAILED', 'Your saved data was not erased. Close this message and use the recovery options to export or restore your progress.'); return; }
+    if (!putCfg(null)) { await notify('APP LOCK REMAINS ACTIVE', 'Your data was reset, but the local App Lock setting could not be cleared. Restart and use your passcode to continue.'); return; }
+    g.location.reload();
   }
 
   /* ---------------------------------------------------------------- auto-lock on background */

@@ -44,17 +44,22 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;       // same-origin only (the app makes no cross-site requests)
-  event.respondWith(staleWhileRevalidate(req));
+  event.respondWith(staleWhileRevalidate(req, event));
 });
 
-async function staleWhileRevalidate(req) {
-  const cache = await caches.open(CACHE);
+async function staleWhileRevalidate(req, event) {
+  // Start and attach the refresh before the first await so the fetch event
+  // remains alive until the updated response has been written to the cache.
+  const cachePromise = caches.open(CACHE);
+  const network = fetch(req, { cache: 'no-cache' })
+    .then(async (res) => { if (res && res.ok) await (await cachePromise).put(req, res.clone()); return res; })
+    .catch(() => undefined);
+  event.waitUntil(network.then(() => undefined));
+
+  const cache = await cachePromise;
   const isNav = req.mode === 'navigate';
   const cached = (await cache.match(req, { ignoreSearch: true })) || (isNav ? await cache.match('./index.html') : undefined);
-  const network = fetch(req, { cache: 'no-cache' })
-    .then((res) => { if (res && res.ok) cache.put(req, res.clone()); return res; })
-    .catch(() => undefined);
-  if (cached) { network.catch(() => {}); return cached; }
+  if (cached) return cached;
   const res = await network;
   return res || (isNav ? cache.match('./index.html') : Response.error());
 }

@@ -14,7 +14,7 @@ HunterArsenal is a local-first, offline-capable PWA built with vanilla JavaScrip
 
 ## Local data and security
 
-Progress is stored on-device in `hunterarsenal.v3` and sanitized when loaded or imported. v2.4.0 upgrades the sanitized record in place without clearing progression. Encrypted backups use the existing Web Crypto security implementation. Browser storage itself is not encrypted; protect exported backups and use App Lock on shared devices.
+Progress is stored on-device in `hunterarsenal.v3`. Records are validated before normalization; unsupported, incomplete, or lossy-to-normalize data enters recovery instead of being silently shortened or replaced with defaults. Large valid collections are retained without the former arbitrary collection caps. A validated backup restore or explicitly confirmed reset is required to resolve recovery. Cross-tab writes use a stale-record check, though browser localStorage does not provide an atomic compare-and-swap guarantee. Recovery snapshots after a failed rollback are held in memory for export while the page remains open; keep independent backups. Encrypted backups use the existing Web Crypto security implementation. Browser storage itself is not encrypted; App Lock is a screen lock, not data-at-rest encryption. Protect exported backups and use a protected device profile.
 
 ## Optional deployment assets
 

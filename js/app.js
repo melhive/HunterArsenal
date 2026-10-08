@@ -93,11 +93,14 @@ const fmtDate = (k, o) => G.parseKey(k).toLocaleDateString('en-US', o || { month
 const rankPill = (id, tag) => `<${tag || 'span'} class="pill" data-rank="${id}" ${tag === 'button' ? 'data-act="rank-modal" aria-label="Rank details"' : ''}>${id}-Rank</${tag || 'span'}>`;
 
 /* ============================== UI state ============================== */
-let view = 'home', homeTab = 'today', bonusSub = null, profileSub = null, settingsSub = null, curDay = today();
+let view = 'home', homeTab = 'today', bonusSub = null, profileSub = null, settingsSub = null, curDay = today(), sheetReturnFocus = null;
 let habitFilter = 'ALL', skillFilter = 'ALL', achFilter = 'all', achSort = 'default', titleFilter = 'all', titleCat = 'All', titleQuery = '';
 let weekOffset = 0, historyYear = new Date().getFullYear(), activeHeatDay = null, renderedHeatYear = null, popId = null, menuSkill = null, menuHabit = null, chFilter = 'all', classTab = null, deferredPrompt = null, swReg = null, appVersion = window.APP_VERSION || '', draft = null, dqTimer = null, dqNoticeQueued = false;
 
-const save = () => { if (!Store.save(S)) toast('Storage is full or blocked. Export a backup in Settings.'); };
+const save = () => {
+  if (Store.isRecoveryRequired() || !Store.save(S)) { render(); return false; }
+  return true;
+};
 
 /* ============================== theme ============================== */
 function applyTheme() {
@@ -292,7 +295,7 @@ function achievementsHTML() {
     <div class="list">${list.map(({ a, at }) => {
       const hid = a.hidden && !at;
       return panel(`arow tone ${at ? '' : 'locked'} ${hid ? 'hidden-a' : ''}`, `<div class="bdg">${hid ? '?' : ic(a.icon)}</div><div><b>${hid ? 'Hidden Qualification' : a.name}</b><span class="d">${hid ? 'Keep going to discover this qualification.' : a.desc}</span></div>${hid ? '<div class="prog">???</div>' : progressCell(a, ctx, at)}<div class="reward ${at ? 'got' : ''}">${at ? ic('check') : ic('lock')}${hid ? '??? HC' : `+${a.reward} HC`}</div>`, '', 'div', `--tone:${a.tone}`);
-    }).join('') || '<div class="empty"><b>Nothing here</b>No qualifications match this filter.</div>'}</div>`;
+    }).join('') || '<div class="empty"><b>No qualifications match</b>Try another filter to review more qualifications.</div>'}</div>`;
 }
 function challengesHTML() {
   const ctx = G.context(S, today());
@@ -300,7 +303,7 @@ function challengesHTML() {
   if (chFilter === 'active') list = list.filter(x => !x.at); else if (chFilter === 'completed') list = list.filter(x => x.at);
   const f = (id, label) => `<button class="fchip" aria-pressed="${chFilter === id}" data-act="chal-filter" data-v="${id}">${label}</button>`;
   return subHead('swords', 'Operations', 'Simple goals with real rewards.', hcChip()) + `<div class="filters">${f('all', 'All')}${f('active', 'Active')}${f('completed', 'Completed')}</div>
-    <div class="list">${list.map(({ c, at }) => panel(`arow tone ${at ? '' : 'locked'}`, `<div class="bdg">${ic(c.icon)}</div><div><b>${c.name}</b><span class="d">${c.desc}</span></div>${progressCell(c, ctx, at).replace('Unlocked', 'Completed')}<div class="reward ${at ? 'got' : ''}">${at ? ic('check') : ic('lock')}+${c.reward} HC</div>`, '', 'div', `--tone:${c.tone}`)).join('') || '<div class="empty"><b>Nothing here</b>No challenges match this filter.</div>'}</div>`;
+    <div class="list">${list.map(({ c, at }) => panel(`arow tone ${at ? '' : 'locked'}`, `<div class="bdg">${ic(c.icon)}</div><div><b>${c.name}</b><span class="d">${c.desc}</span></div>${progressCell(c, ctx, at).replace('Unlocked', 'Completed')}<div class="reward ${at ? 'got' : ''}">${at ? ic('check') : ic('lock')}+${c.reward} HC</div>`, '', 'div', `--tone:${c.tone}`)).join('') || '<div class="empty"><b>No operations match</b>Try another filter to review more operations.</div>'}</div>`;
 }
 function titlesHTML() {
   const ctx = G.context(S, today()), eq = currentTitle();
@@ -578,6 +581,7 @@ function rulesHTML() {
 
 let lastKey = '', lastTab = '';
 function render() {
+  if (Store.isRecoveryRequired()) { renderStorageRecovery(); return; }
   const sc = $('#scroll'), top = sc ? sc.scrollTop : 0;
   const oldHeatScroll = view === 'history' ? $('#history-heat-scroll')?.scrollLeft : null;
   const heatYearChanged = view === 'history' && renderedHeatYear !== historyYear;
@@ -596,6 +600,48 @@ function render() {
   lastKey = key; lastTab = tk;
   if (view === 'profile' && profileSub === 'license') drawCard();
 }
+function renderStorageRecovery() {
+  const info = Store.recoveryInfo() || { reason: 'unknown', records: [] };
+  const available = info.records.filter(x => x.available).length;
+  const reason = info.reason === 'read-failure' ? 'The browser could not read the saved record.' :
+    info.reason === 'write-failure' ? 'A safe save could not be verified.' :
+    info.reason === 'rollback-failure' ? 'A save could not be verified or safely rolled back. Export recovery data before closing this page.' :
+    info.reason === 'concurrent-write' ? 'Another HunterArsenal tab changed saved data. This tab has paused to protect both versions.' :
+    'The saved record could not be validated or migrated safely.';
+  const preservation = available ? 'Readable original records are preserved and available for export.' : 'No reset was attempted, but the browser could not expose a readable record for export.';
+  $('#app').innerHTML = `<main class="scroll" id="scroll"><div class="page"><div class="pagebg"></div>
+    <section class="panel card recovery-card" role="alert" aria-labelledby="recovery-title"><div class="frame"><div class="body">
+      <h1 id="recovery-title" tabindex="-1">DATA RECOVERY REQUIRED</h1><p class="sub">${reason}</p>
+      <p>Normal processing and saving are paused. ${preservation} A validated restore or confirmed reset is required to resume.</p>
+      <p>${available} saved record${available === 1 ? '' : 's'} available for recovery export. Recovery exports may contain personal progress data; keep the file private.</p>
+      <p id="recovery-message" role="status" aria-live="polite"></p>
+      <div class="recovery-actions"><button class="btn" data-recovery-act="restore">RESTORE BACKUP</button><button class="btn ghost" data-recovery-act="export">DOWNLOAD RECOVERY DATA</button><button class="btn danger" data-recovery-act="reset">RESET ALL DATA</button></div>
+    </div></div></section></div></main>`;
+  $('#recovery-title')?.focus({ preventScroll: true });
+}
+function exportRecoveryData() {
+  try {
+    const blob = new Blob([Store.exportRecovery()], { type: 'application/json' });
+    HA.Card.download(blob, `hunterarsenal-recovery-${today()}.json`);
+  } catch (e) { Notice.show({ title: 'RECOVERY EXPORT FAILED', allowDuringRecovery: true, bodyHTML: '<p>The recovery data could not be packaged. Leave this screen open and try again.</p>', secondary: { label: 'CLOSE' } }); }
+}
+function restoreCandidate(candidate) {
+  candidate.meta.onboarded = true;
+  const boot = G.processDays(candidate, today());
+  G.dqTick(candidate, Date.now()); G.refreshDay(candidate, today()); G.checkUnlocks(candidate, today());
+  const result = Store.restore(candidate);
+  if (!result.ok) { render(); return; }
+  S = result.state; ob = null; view = 'home'; homeTab = 'today'; bonusSub = null; profileSub = null; settingsSub = null;
+  applyTheme(); render(); toast('Backup restored'); reportEvents(boot.events);
+}
+function importRecoveryBackup() { importData(); }
+document.addEventListener('click', (e) => {
+  const control = e.target.closest('[data-recovery-act]'); if (!control) return;
+  e.preventDefault();
+  if (control.dataset.recoveryAct === 'export') exportRecoveryData();
+  else if (control.dataset.recoveryAct === 'restore') importRecoveryBackup();
+  else if (control.dataset.recoveryAct === 'reset') resetAll();
+});
 async function drawCard() {
   const cv = $('#card-canvas'); if (!cv) return;
   try { await HA.Card.render(G.getHunterCardData(S, today()), cv); } catch (e) { console.warn('card render failed', e); }
@@ -603,6 +649,7 @@ async function drawCard() {
 
 /* ============================== feedback ============================== */
 function toast(msg) {
+  if (Store.isRecoveryRequired()) return;
   const old = $('#layer .toast'); if (old) old.remove();
   const el = document.createElement('div'); el.className = 'toast'; el.setAttribute('role', 'status'); el.textContent = msg;
   $('#layer').appendChild(el); setTimeout(() => el.remove(), 2900);
@@ -613,10 +660,21 @@ function floatXP(x, y, txt) {
 }
 function openSheet(inner, o) {
   o = o || {};
+  if (!$('#layer .sheet')) sheetReturnFocus = document.activeElement;
   $('#layer').innerHTML = `<div class="backdrop ${o.center ? 'center' : ''}" data-act="sheet-bg"><div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(o.label || 'Dialog')}">${panel('', inner)}</div></div>`;
-  const f = $('#layer input, #layer textarea'); if (f && !o.nofocus) f.focus({ preventScroll: true });
+  const dialog = $('#layer .sheet');
+  if (dialog) {
+    dialog.tabIndex = -1;
+    const first = dialog.querySelector('input:not([disabled]),textarea:not([disabled]),select:not([disabled]),button:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])');
+    (first || dialog).focus({ preventScroll: true });
+  }
 }
-const closeSheet = () => { draft = null; const bd = $('#layer .backdrop'); if (!bd) return; bd.classList.add('closing'); setTimeout(() => bd.remove(), 190); };
+const closeSheet = () => {
+  draft = null; const bd = $('#layer .backdrop'); if (!bd) return;
+  const returnFocus = sheetReturnFocus; sheetReturnFocus = null;
+  bd.classList.add('closing');
+  setTimeout(() => { bd.remove(); if (!$('#layer .sheet') && returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true }); }, 190);
+};
 const sheetHead = (icon, title, sub, logo) => `<div class="sheet-head">${logo ? `<img src="assets/branding/hunterarsenal-logo.png" data-fallback="assets/fallback/logo-mark.svg" alt="">` : `<span class="qicon" style="width:2.6rem;height:2.6rem;font-size:1.6rem">${ic(icon)}</span>`}<div class="ttl"><h2>${title}</h2><p>${sub}</p></div><button class="xbtn" data-act="sheet-close" aria-label="Close">${ic('close')}</button></div>`;
 const stat = (icon, label, val, color) => `<div class="nw-stat" style="--sc:${color || 'var(--accent)'}">${ic(icon)}<div><small>${label}</small><b>${val}</b></div></div>`;
 
@@ -627,7 +685,8 @@ function mutate(fn) {
   const ev = G.refreshDay(S, t);
   const { fresh } = G.checkUnlocks(S, t);
   const after = snap();
-  save(); render();
+  const saved = save(); render();
+  if (!saved) return null;
   announce(before, after, ev, fresh);
   return res;
 }
@@ -1049,6 +1108,10 @@ async function exportEncrypted() {
   } catch (e) { toast('Encryption is not available in this browser'); }
 }
 function importData() {
+  const feedback = msg => {
+    if (Store.isRecoveryRequired()) { const status = $('#recovery-message'); if (status) status.textContent = msg; }
+    else toast(msg);
+  };
   const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'application/json,.json';
   inp.onchange = async () => {
     try {
@@ -1058,19 +1121,19 @@ function importData() {
           const pw = await HA.Security.askPassphrase({ title: 'DECRYPT BACKUP' });
           if (!pw) return;
           try { text = await HA.Security.decryptBackup(text, pw); break; }
-          catch (e) { toast('Wrong passphrase, or the file is damaged'); if (tries >= 4) return; }
+          catch (e) { feedback('Wrong passphrase, or the file is damaged.'); if (tries >= 4) return; }
         }
       }
       const next = Store.importJSON(text);
-      Notice.show({ title: 'RESTORE BACKUP?', tone: '#b98a50', dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>Habits</span><b>${next.habits.length}</b></div><div><span>Check-ins</span><b>${Object.values(next.completions).reduce((a, d) => a + Object.keys(d).length, 0)}</b></div></div><p style="margin:.6rem 0 0;font-size:.78rem;color:#aeb7c2">This replaces everything currently on this device.</p>`,
-        secondary: { label: 'CANCEL' }, primary: { label: 'RESTORE', onClick: () => { S = next; S.meta.onboarded = true; ob = null; closeSheet(); const r = G.processDays(S, today()); G.refreshDay(S, today()); save(); applyTheme(); render(); toast('Backup restored'); reportEvents(r.events); } } });
-    } catch (e) { toast('That file is not a valid HunterArsenal backup'); }
+      Notice.show({ title: 'RESTORE BACKUP?', allowDuringRecovery: Store.isRecoveryRequired(), tone: '#b98a50', dismissible: true, bodyHTML: `<div class="nw-rows"><div><span>Habits</span><b>${next.habits.length}</b></div><div><span>Check-ins</span><b>${Object.values(next.completions).reduce((a, d) => a + Object.keys(d).length, 0)}</b></div></div><p style="margin:.6rem 0 0;font-size:.78rem;color:#aeb7c2">This replaces everything on this device only after the validated backup has been written successfully.</p>`,
+        secondary: { label: 'CANCEL' }, primary: { label: 'RESTORE', onClick: () => restoreCandidate(next) } });
+    } catch (e) { feedback('That file is not a valid HunterArsenal backup. Existing saved data has not been replaced.'); }
   };
   inp.click();
 }
 function resetAll() {
-  Notice.show({ title: 'RESET ALL DATA?', tone: '#b5575f', sound: 'penalty', dismissible: true, bodyHTML: '<p style="margin:0;font-size:.85rem;color:#d5dbe2">Every habit, XP, title and setting on this device will be deleted. Export a backup first if you might want it back.</p>',
-    secondary: { label: 'CANCEL' }, primary: { label: 'RESET', onClick: () => { Store.wipe(); S = Store.defaults(); ob = null; view = 'home'; homeTab = 'today'; bonusSub = null; profileSub = null; applyTheme(); render(); openOnboarding(); } } });
+  Notice.show({ title: 'RESET ALL DATA?', allowDuringRecovery: true, tone: '#b5575f', sound: 'penalty', dismissible: true, bodyHTML: '<p style="margin:0;font-size:.85rem;color:#d5dbe2">This permanently resets all HunterArsenal progress and settings on this device, including Habits, Skills, XP, records, Hunter Credits, and profile data. Export recovery data or a backup first if you might want it back.</p>',
+    secondary: { label: 'CANCEL' }, primary: { label: 'RESET', onClick: () => { const result = Store.reset(); if (!result.ok) { render(); return; } S = result.state; ob = null; view = 'home'; homeTab = 'today'; bonusSub = null; profileSub = null; applyTheme(); render(); openOnboarding(); } } });
 }
 
 /* ============================== events ============================== */
@@ -1103,6 +1166,7 @@ window.addEventListener('resize', hideHeatTooltip);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && activeHeatDay) hideHeatTooltip(); });
 
 document.addEventListener('click', (e) => {
+  if (Store.isRecoveryRequired()) return;
   if ((menuSkill || menuHabit) && !e.target.closest('.menu') && !e.target.closest('[data-act="skill-menu"],[data-act="habit-menu"]')) { menuSkill = null; menuHabit = null; render(); }
   const el = e.target.closest('[data-act]'); if (!el) return;
   const act = el.dataset.act, d = el.dataset;
@@ -1228,8 +1292,17 @@ document.addEventListener('input', (e) => {
   else if (k === 'title-search') { titleQuery = e.target.value; const l = $('#title-list'); if (l) { const ctx = G.context(S, today()), eq = currentTitle(); let list = G.TITLES.map(t => ({ t, at: S.unlocked.titles[t.id] })); if (titleCat !== 'All') list = list.filter(x => x.t.cat === titleCat); if (titleFilter === 'unlocked') list = list.filter(x => x.at); else if (titleFilter === 'locked') list = list.filter(x => !x.at); else if (titleFilter === 'equipped') list = list.filter(x => eq && x.t.id === eq.id); const q = titleQuery.trim().toLowerCase(); if (q) list = list.filter(x => (x.t.name + ' ' + x.t.desc + ' ' + x.t.cat).toLowerCase().includes(q)); l.innerHTML = titleRows(list, ctx, eq); } }
 });
 document.addEventListener('keydown', (e) => {
+  const dialog = $('#layer .sheet');
+  if (e.key === 'Escape' && dialog && !HA.Notice.busy) { closeSheet(); return; }
+  if (e.key === 'Tab' && dialog) {
+    const focusable = [...dialog.querySelectorAll('button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])')];
+    if (!focusable.length) { e.preventDefault(); dialog.focus({ preventScroll: true }); return; }
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (e.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { e.preventDefault(); first.focus(); }
+    return;
+  }
   if ((e.key === 'Enter' || e.key === ' ') && e.target.closest && e.target.closest('[data-act="class-overview"]')) { e.preventDefault(); classOverviewModal(); }
-  else if (e.key === 'Escape' && $('#layer .sheet') && !HA.Notice.busy) closeSheet();
 });
 
 let cropPointers=new Map(), cropGesture=null;
@@ -1269,13 +1342,14 @@ function rollover() {
   curDay = today(); const r = G.processDays(S, curDay); G.refreshDay(S, curDay); save(); render(); reportEvents(r.events);
 }
 setInterval(() => {
+  if (Store.isRecoveryRequired() || !S) return;
   if (today() !== curDay) { rollover(); return; }
   tickLife(); const cbc = $('#cb-clock'); if (cbc) cbc.textContent = phtClock();
   const dqBefore = JSON.stringify(S.dailyQuest);
   if (G.dqTick(S, Date.now())) { save(); render(); showDQ(); } else if (JSON.stringify(S.dailyQuest) !== dqBefore) { save(); render(); }
 }, 1000);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
+  if (Store.isRecoveryRequired() || !S || document.visibilityState !== 'visible') return;
   if (today() !== curDay) rollover();
   if (swReg) swReg.update().catch(() => {});
 });
@@ -1303,18 +1377,22 @@ if ('serviceWorker' in navigator) {
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
 /* ============================== boot ============================== */
-applyTheme();
-const boot = G.processDays(S, today());
-G.dqTick(S, Date.now());
-G.refreshDay(S, today());
-G.checkUnlocks(S, today());
-save(); render();
-if (!S.meta.onboarded) openOnboarding();
-else {
-  if (S.meta.lastSeenVersion !== window.APP_VERSION) { S.meta.lastSeenVersion = window.APP_VERSION; save(); }
-  setTimeout(showWhatsNewIfNeeded, 600);
-  setTimeout(() => reportEvents(boot.events), 900);
-  if (S.dailyQuest.state === 'available') dqTimer = setTimeout(showDQ, G.CONST.DAILY_QUEST_REOPEN_DELAY_MS);   // missed schedule: show ~2s after opening
+if (Store.isRecoveryRequired() || !S) {
+  render();
+} else {
+  applyTheme();
+  const boot = G.processDays(S, today());
+  G.dqTick(S, Date.now());
+  G.refreshDay(S, today());
+  G.checkUnlocks(S, today());
+  const saved = save(); render();
+  if (saved && !Store.isRecoveryRequired() && !S.meta.onboarded) openOnboarding();
+  else if (saved && !Store.isRecoveryRequired()) {
+    if (S.meta.lastSeenVersion !== window.APP_VERSION) { S.meta.lastSeenVersion = window.APP_VERSION; save(); }
+    setTimeout(showWhatsNewIfNeeded, 600);
+    setTimeout(() => reportEvents(boot.events), 900);
+    if (S.dailyQuest.state === 'available') dqTimer = setTimeout(showDQ, G.CONST.DAILY_QUEST_REOPEN_DELAY_MS);
+  }
 }
 window.__HA = { get state() { return S; }, set state(v) { S = v; }, render, save, showDQ };
 })();
