@@ -135,7 +135,7 @@
     overlay.className = 'lk-wrap'; overlay.setAttribute('role', 'dialog'); overlay.setAttribute('aria-modal', 'true'); overlay.setAttribute('aria-label', 'App locked');
     overlay.innerHTML = `<div class="lk-top"><span>RESTRICTED // PERSONAL</span><span>ACCESS CONTROL</span></div>
       <div class="lk-body">
-        <img class="lk-logo" src="assets/branding/hunterarsenal-logo.png" data-fallback="assets/fallback/logo-mark.svg" alt="">
+        <img class="lk-logo" src="assets/branding/hunterarsenal-ha-logo-transparent.png" data-fallback="assets/fallback/logo-mark.svg" alt="">
         <h2>ACCESS RESTRICTED</h2><p class="lk-sub">Enter passcode to continue</p>
         <div class="lk-dots" aria-hidden="true"></div><div class="lk-msg" role="status" aria-live="polite"></div>
         ${padHTML(c)}

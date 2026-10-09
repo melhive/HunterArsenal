@@ -2,8 +2,19 @@
  * Bump APP_VERSION and add a CHANGELOG entry to ship an update.
  * Loaded by index.html AND by sw.js (importScripts), so the cache name always matches. */
 (function (g) {
-  g.APP_VERSION = '2.5.0';
+  g.APP_VERSION = '2.6.0';
   g.CHANGELOG = [
+    {
+      version: '2.6.0',
+      date: '2026-10-09',
+      sections: [
+        { title: 'VISUAL IDENTITY', notes: [
+          'Integrated the official HA sword logo across app branding and icons',
+          'Refreshed city, quest and life background artwork',
+          'Updated offline asset cache for the new branding'
+        ] }
+      ]
+    },
     {
       version: '2.5.0',
       date: '2026-10-08',

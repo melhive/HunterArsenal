@@ -69,7 +69,7 @@ The visual treatment uses near-black graphite surfaces, steel text and borders, 
 ## Icons and imagery
 
 - UI icons are inline SVG paths from the app icon map and use the `.ico` class (`1em` square, current-color stroke).
-- The official logo is loaded from `assets/branding/hunterarsenal-logo.png` with SVG fallbacks. Optional art and fonts may be absent; documented fallback artwork is used.
+- The official HA sword logo is loaded from `assets/branding/hunterarsenal-ha-logo-transparent.png` with SVG fallbacks. Optional art and fonts may be absent; documented fallback artwork is used.
 - The Hunter License is drawn to canvas from authoritative view data.
 
 ## Responsive and mobile behavior

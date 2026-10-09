@@ -20,7 +20,7 @@ Progress is stored on-device in `hunterarsenal.v3`. Records are validated before
 
 The app uses drawn/fallback artwork if these optional deployment assets are absent:
 
-- `assets/branding/hunterarsenal-logo.png`
+- `assets/branding/hunterarsenal-ha-logo-transparent.png`
 - `assets/branding/license-art.png` or `license-art-E.png` through `license-art-S.png`
 - `assets/characters/hunter-main.png` and `hunter-quest.png`
 - Additional local fonts

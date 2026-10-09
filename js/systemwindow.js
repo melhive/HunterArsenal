@@ -7,7 +7,7 @@
   const queue = [];
   let active = null, lastFocus = null;
 
-  const LOGO = 'assets/branding/hunterarsenal-logo.png', LOGO_FALLBACK = 'assets/fallback/logo-emblem.svg';
+  const LOGO = 'assets/branding/hunterarsenal-ha-logo-transparent.png', LOGO_FALLBACK = 'assets/fallback/logo-emblem.svg';
 
   function root() { return document.getElementById('notice'); }
 

@@ -167,6 +167,20 @@ const mig = Store.load(); assert(mig.habits[0].id === 'old' && G.totalXP(mig) ==
   assert(migrated && migrated.v === 4 && migrated.profile.name === 'Legacy Profile' && migrated.streak.milestones.includes(7), 'valid schema v3 state migrates and preserves existing profile and streak progress');
 }
 {
+  const legacy3 = Store.defaults(); legacy3.v = 3; legacy3.profile.name = 'Existing Custom Name'; legacy3.profile.createdAt = 0;
+  legacy3.settings.sound = false; legacy3.settings.penalties = false; legacy3.completions = { '2026-01-01': { saved: { xp: G.CONST.HUNTER_XP, ax: G.CONST.ATTR_XP, mx: G.CONST.MASTERY_XP, attr: 'INT', at: 0 } } };
+  legacy3.habits = [mk('saved', 'INT')]; legacy3.purchases = [{ id: 'forest', cost: 250, at: 0 }];
+  legacy3.unlocked.titles.first = 0; legacy3.dailyQuest = { state: 'scheduled', at: 0, day: '2026-01-01', completed: 0, repeat: '07:15' };
+  delete legacy3.streak.milestones;
+  const source = JSON.stringify(legacy3), x = isolatedStore({ 'hunterarsenal.v3': source });
+  const migrated = x.Store.load(), result = JSON.parse(x.data['hunterarsenal.v3']);
+  assert(migrated && !x.Store.isRecoveryRequired() && migrated.profile.name === 'Existing Custom Name' && migrated.profile.createdAt === 0 && migrated.settings.sound === false && migrated.settings.penalties === false, 'v3 compatibility accepts and preserves custom profile, false settings and zero profile timestamp');
+  assert(result.profile.createdAt === 0 && result.completions['2026-01-01'].saved.at === 0 && result.purchases[0].at === 0 && result.unlocked.titles.first === 0 && result.dailyQuest.at === 0 && result.dailyQuest.completed === 0 && result.habits[0].id === 'saved', 'legacy source values survive migration and verified current write');
+  const current = isolatedStore({ 'hunterarsenal.v3': JSON.stringify(result) });
+  const loaded = current.Store.load();
+  assert(loaded && !current.Store.isRecoveryRequired() && loaded.profile.createdAt === 0 && loaded.profile.name === 'Existing Custom Name', 'migrated current-format record reloads without false recovery');
+}
+{
   const oldState = Store.defaults(); oldState.v = 3; delete oldState.streak.milestones;
   const old = isolatedStore({ 'hunterarsenal.v3': JSON.stringify(oldState) });
   const randomValues = old.c.crypto.getRandomValues;

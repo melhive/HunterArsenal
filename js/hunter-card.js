@@ -246,7 +246,7 @@
     try { draw(d,canvas,null); }
     catch(e) { const c=canvas.getContext('2d'); if(c){canvas.width=W;canvas.height=H;c.fillStyle='#0b0e12';c.fillRect(0,0,W,H);c.fillStyle='#e6ebf0';c.font='600 32px sans-serif';c.fillText('Hunter License preview could not be drawn.',48,90);} throw e; }
     const jobs=Promise.all([
-      loadImg('assets/branding/hunterarsenal-logo.png').then(x=>x||loadImg('assets/fallback/logo-mark.svg')),
+      loadImg('assets/branding/hunterarsenal-ha-logo-transparent.png').then(x=>x||loadImg('assets/fallback/logo-mark.svg')),
       loadImg(d.avatar),loadImg(`assets/branding/license-art-${d.rank}.png`),loadImg('assets/branding/license-art.png'),
       document.fonts&&document.fonts.ready?Promise.race([document.fonts.ready,new Promise(r=>setTimeout(r,2000))]).then(()=>null):Promise.resolve(null)
     ]);

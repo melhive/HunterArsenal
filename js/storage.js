@@ -52,7 +52,7 @@
     out.profile.name = str(p.name, 24, 'Hunter') || 'Hunter';
     out.profile.avatar = typeof p.avatar === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(p.avatar) && p.avatar.length < 450000 ? p.avatar : null;
     out.profile.hunterId = typeof p.hunterId === 'string' && /^HA-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(p.hunterId) ? p.hunterId : base.profile.hunterId;
-    out.profile.createdAt = clamp(p.createdAt, 946684800000, Date.now() + 864e5, base.profile.createdAt);
+    out.profile.createdAt = clamp(p.createdAt, 0, Date.now() + 864e5, base.profile.createdAt);
     out.profile.equippedTitle = G.TITLES.some(t => t.id === p.equippedTitle) ? p.equippedTitle : null;
     out.profile.birthdate = DATE_RE.test(p.birthdate || '') ? p.birthdate : '';
     out.profile.lifespan = Math.round(clamp(p.lifespan, 30, 120, 80));
@@ -143,7 +143,7 @@
       if (!Object.prototype.hasOwnProperty.call(p, 'name') || !Object.prototype.hasOwnProperty.call(p, 'hunterId') ||
           !Object.prototype.hasOwnProperty.call(p, 'createdAt') || !Object.prototype.hasOwnProperty.call(p, 'lifespan') ||
           typeof p.name !== 'string' || !p.name.trim() || p.name.trim() !== p.name || p.name.length > 24 ||
-          !/^HA-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(p.hunterId) || !Number.isFinite(p.createdAt) ||
+          !/^HA-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(p.hunterId) || !Number.isFinite(p.createdAt) || p.createdAt < 0 || p.createdAt > Date.now() + 864e5 ||
           !Number.isInteger(p.lifespan) || p.lifespan < 30 || p.lifespan > 120) throw new Error('The legacy Profile cannot be migrated without replacing user data.');
       if (!['name','avatar','hunterId','createdAt','equippedTitle','birthdate','lifespan'].every(k => Object.prototype.hasOwnProperty.call(p, k)) ||
           !['theme','sound','penalties'].every(k => Object.prototype.hasOwnProperty.call(raw.settings, k)) ||
@@ -166,7 +166,7 @@
       const p = raw.profile;
       onlyKeys(p, ['name','avatar','hunterId','createdAt','equippedTitle','birthdate','lifespan'], 'Profile');
       if (typeof p.name !== 'string' || !p.name.trim() || p.name.trim() !== p.name || p.name.length > 24 || /[\u0000-\u001f\u007f]/.test(p.name) ||
-          !/^HA-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(p.hunterId || '') || !Number.isFinite(p.createdAt) || p.createdAt < 946684800000 || p.createdAt > Date.now() + 864e5 ||
+          !/^HA-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(p.hunterId || '') || !Number.isFinite(p.createdAt) || p.createdAt < 0 || p.createdAt > Date.now() + 864e5 ||
           (p.avatar !== undefined && !(p.avatar === null || (typeof p.avatar === 'string' && /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(p.avatar) && p.avatar.length < 450000))) ||
           (p.equippedTitle !== undefined && !(p.equippedTitle === null || G.TITLES.some(t => t.id === p.equippedTitle))) ||
           (p.birthdate !== undefined && !(p.birthdate === '' || DATE_RE.test(p.birthdate))) || !Number.isInteger(p.lifespan) || p.lifespan < 30 || p.lifespan > 120) {
@@ -197,7 +197,7 @@
           !typed(raw.profile, { name: string, hunterId: string, createdAt: number, birthdate: string, lifespan: number }) ||
           !(raw.profile.avatar === null || string(raw.profile.avatar)) || !(raw.profile.equippedTitle === null || string(raw.profile.equippedTitle))) throw new Error('The saved Profile fields are incomplete.');
       if (!raw.profile.name.trim() || raw.profile.name.length > 24 || !/^HA-[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(raw.profile.hunterId) ||
-          !inRange(raw.profile.createdAt, 946684800000, Date.now() + 864e5) || !Number.isInteger(raw.profile.lifespan) || raw.profile.lifespan < 30 || raw.profile.lifespan > 120 ||
+          !inRange(raw.profile.createdAt, 0, Date.now() + 864e5) || !Number.isInteger(raw.profile.lifespan) || raw.profile.lifespan < 30 || raw.profile.lifespan > 120 ||
           !(raw.profile.equippedTitle === null || G.TITLES.some(t => t.id === raw.profile.equippedTitle)) ||
           !(raw.profile.birthdate === '' || DATE_RE.test(raw.profile.birthdate)) ||
           !(raw.profile.avatar === null || (/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(raw.profile.avatar) && raw.profile.avatar.length < 450000))) throw new Error('The saved Profile values are invalid.');

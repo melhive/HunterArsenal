@@ -129,7 +129,7 @@ const rankEmblem = (id, color) => `<svg viewBox="0 0 48 54" aria-hidden="true"><
 function sysHeader() {
   const alert = S.dailyQuest.state === 'available';
   return `<header class="sys">
-    ${panel('sys-brand', `<img class="sys-logo" src="assets/branding/hunterarsenal-logo.png" data-fallback="assets/fallback/logo-mark.svg" alt=""><div><h1>HUNTER<b>ARSENAL</b></h1><p>HUMAN METAMORPHOSIS PROGRAM</p><small>PROJECT HA-001 // CLASSIFICATION: PERSONAL</small></div>`)}
+    ${panel('sys-brand', `<img class="sys-logo" src="assets/branding/hunterarsenal-ha-logo-transparent.png" data-fallback="assets/fallback/logo-mark.svg" alt=""><div><h1>HUNTER<b>ARSENAL</b></h1><p>HUMAN METAMORPHOSIS PROGRAM</p><small>PROJECT HA-001 // CLASSIFICATION: PERSONAL</small></div>`)}
     ${panel('sys-info', `<div><span>SYS v${esc(appVersion)}</span><span>NODE: LOCAL</span><span>STORAGE: ON-DEVICE<i></i></span></div>`)}
     ${panel('sys-bell', `${ic('bell')}${alert ? '<span class="dot"></span>' : ''}`, `data-act="bell" aria-label="Daily Mission alerts${alert ? ': a mission is waiting' : ''}"`, 'button')}
   </header>`;
@@ -591,7 +591,12 @@ function render() {
   if (view === 'history') requestAnimationFrame(() => {
     const heatScroll = $('#history-heat-scroll');
     if (!heatScroll) return;
-    if (heatYearChanged || oldHeatScroll === null) heatScroll.scrollLeft = historyYear === new Date().getFullYear() ? heatScroll.scrollWidth : 0;
+    if (heatYearChanged || oldHeatScroll === null) {
+      const currentMonth = historyYear === new Date().getFullYear() ? heatScroll.querySelector('[data-current-month="true"]') : null;
+      heatScroll.scrollLeft = currentMonth
+        ? heatScroll.scrollLeft + currentMonth.getBoundingClientRect().left - heatScroll.getBoundingClientRect().left
+        : 0;
+    }
     else heatScroll.scrollLeft = oldHeatScroll;
     renderedHeatYear = historyYear;
   });
@@ -675,7 +680,7 @@ const closeSheet = () => {
   bd.classList.add('closing');
   setTimeout(() => { bd.remove(); if (!$('#layer .sheet') && returnFocus && returnFocus.isConnected) returnFocus.focus({ preventScroll: true }); }, 190);
 };
-const sheetHead = (icon, title, sub, logo) => `<div class="sheet-head">${logo ? `<img src="assets/branding/hunterarsenal-logo.png" data-fallback="assets/fallback/logo-mark.svg" alt="">` : `<span class="qicon" style="width:2.6rem;height:2.6rem;font-size:1.6rem">${ic(icon)}</span>`}<div class="ttl"><h2>${title}</h2><p>${sub}</p></div><button class="xbtn" data-act="sheet-close" aria-label="Close">${ic('close')}</button></div>`;
+const sheetHead = (icon, title, sub, logo) => `<div class="sheet-head">${logo ? `<img src="assets/branding/hunterarsenal-ha-logo-transparent.png" data-fallback="assets/fallback/logo-mark.svg" alt="">` : `<span class="qicon" style="width:2.6rem;height:2.6rem;font-size:1.6rem">${ic(icon)}</span>`}<div class="ttl"><h2>${title}</h2><p>${sub}</p></div><button class="xbtn" data-act="sheet-close" aria-label="Close">${ic('close')}</button></div>`;
 const stat = (icon, label, val, color) => `<div class="nw-stat" style="--sc:${color || 'var(--accent)'}">${ic(icon)}<div><small>${label}</small><b>${val}</b></div></div>`;
 
 /* ============================== state changes ============================== */
@@ -1029,7 +1034,7 @@ function openOnboarding() { ob = ob || { step: 'welcome', name: '', bd: '', ls: 
 function renderOb() {
   let inner;
   if (ob.step === 'welcome') {
-    inner = `<div class="ob-hero"><img src="assets/branding/hunterarsenal-logo.png" data-fallback="assets/fallback/logo-emblem.svg" alt=""><h2>HUNTER ACCESS</h2><p>Human Metamorphosis Program.<br>Log habits. Build consistency. Measure progress.</p></div>
+    inner = `<div class="ob-hero"><img src="assets/branding/hunterarsenal-ha-logo-transparent.png" data-fallback="assets/fallback/logo-emblem.svg" alt=""><h2>HUNTER ACCESS</h2><p>Human Metamorphosis Program.<br>Log habits. Build consistency. Measure progress.</p></div>
       <button class="btn" data-act="ob-next">Initialize</button><button class="btn ghost" data-act="import">Already a Hunter? Import backup</button>`;
   } else if (ob.step === 'create') {
     inner = `${sheetHead('user', 'Create your Hunter', 'Every Hunter begins at Level 1', true).replace(/<button class="xbtn".*?<\/button>/, '')}
