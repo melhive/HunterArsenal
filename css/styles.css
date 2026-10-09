@@ -273,6 +273,7 @@ button.pill { cursor: pointer; }
 .themebtn small { font-size: .62rem; color: var(--gold); }
 
 /* ---------- dock ---------- */
+.lifecard > .panel > .frame > .body {
   background: linear-gradient(90deg, rgba(20, 23, 27, .97) 55%, rgba(20, 23, 27, .1)), url(../assets/fallback/life-scene.svg) right center / auto 100% no-repeat, #14171b; filter: hue-rotate(var(--hue)); }
 .nav { --c: 0.32rem; } .nav .body { display: grid; grid-template-columns: repeat(5, 1fr); height: 3.2rem; --fill: rgba(15, 18, 21, .96); }
 .nav button { display: grid; place-content: center; justify-items: center; gap: .18rem; font-size: .7rem; font-weight: 600; color: #7d8895; letter-spacing: .01em; position: relative; text-align: center; }
@@ -283,6 +284,7 @@ button.pill { cursor: pointer; }
 
 /* ---------- sub pages ---------- */
 .page { padding: calc(var(--safe-top) + .9rem) .7rem 1rem; }
+.page > .backbtn[data-act="rules-back"] { display: inline-flex; width: auto; min-width: 4.8rem; height: 2rem; align-items: center; justify-content: center; gap: .35rem; padding: 0 .55rem; margin: 0 0 .6rem; white-space: nowrap; font: 600 .7rem var(--font-ui); }
 .page h1 { margin: 0 0 .15rem; font: 700 1.6rem/1.1 var(--font-display); letter-spacing: .03em; text-transform: uppercase; background: linear-gradient(180deg, #e6ebf0 25%, color-mix(in srgb, var(--accent) 45%, #e6ebf0)); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .page .sub { margin: 0 0 .8rem; font-size: .78rem; color: #8c97a4; letter-spacing: .04em; }
 .pagebg { position: absolute; left: 0; right: 0; top: 0; height: 15rem; pointer-events: none; z-index: 0;
