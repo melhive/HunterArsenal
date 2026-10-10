@@ -8,6 +8,13 @@
       version: '2.6.0',
       date: '2026-10-09',
       sections: [
+        { title: 'OFFLINE DATA PROTECTION', notes: [
+          'Verified saves keep a bounded copy of the last confirmed state and recover interrupted writes on startup',
+          'Ambiguous or failed writes pause saving and preserve available recovery records',
+          'Reset flows require a fresh five-digit confirmation code',
+          'Backup files identify their format version and unsupported explicit versions are rejected',
+          'The app reports whether the browser granted persistent storage; offline use remains available either way'
+        ] },
         { title: 'VISUAL IDENTITY', notes: [
           'Integrated the official HA sword logo across app branding and icons',
           'Refreshed city, quest and life background artwork',

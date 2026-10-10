@@ -9,6 +9,10 @@
   const G = HA.Game;
   const KEY = 'hunterarsenal.v3';
   const LEGACY_KEYS = ['hunterarsenal.v2'];            // older builds: migrated (and re-validated) on first load
+  const INSTALL_KEY = 'hunterarsenal.install.v1';
+  const INSTALL_MARKER = 'initialized';
+  const JOURNAL_KEY = 'hunterarsenal.recovery.v1';
+  const COMMIT_KEY = 'hunterarsenal.recovery.commit.v1';
   let recovery = null;
   let lastKnownRaw = null;
 
@@ -354,9 +358,74 @@
     if (!recovery) recovery = { reason, records: records || [], candidate: candidate || null };
     else if (candidate) recovery.candidate = candidate;
   }
+  // SHA-256 detects accidental corruption; it is not a signature or authentication tag.
+  function checksum(text) {
+    const bytes = new TextEncoder().encode(text), bitLength = bytes.length * 8;
+    const paddedLength = Math.ceil((bytes.length + 9) / 64) * 64, padded = new Uint8Array(paddedLength);
+    padded.set(bytes); padded[bytes.length] = 0x80;
+    const view = new DataView(padded.buffer), hi = Math.floor(bitLength / 0x100000000), lo = bitLength >>> 0;
+    view.setUint32(paddedLength - 8, hi); view.setUint32(paddedLength - 4, lo);
+    const k = [0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2];
+    const h = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19], w = new Uint32Array(64), r = (x,n) => (x >>> n) | (x << (32 - n));
+    for (let offset = 0; offset < paddedLength; offset += 64) {
+      for (let i = 0; i < 16; i++) w[i] = view.getUint32(offset + i * 4);
+      for (let i = 16; i < 64; i++) { const a=w[i-15], b=w[i-2], s0=r(a,7)^r(a,18)^(a>>>3), s1=r(b,17)^r(b,19)^(b>>>10); w[i]=(w[i-16]+s0+w[i-7]+s1)>>>0; }
+      let [a,b,c,d,e,f,g0,h0] = h;
+      for (let i=0;i<64;i++) { const s1=r(e,6)^r(e,11)^r(e,25), ch=(e&f)^(~e&g0), t1=(h0+s1+ch+k[i]+w[i])>>>0, s0=r(a,2)^r(a,13)^r(a,22), maj=(a&b)^(a&c)^(b&c), t2=(s0+maj)>>>0; h0=g0;g0=f;f=e;e=(d+t1)>>>0;d=c;c=b;b=a;a=(t1+t2)>>>0; }
+      [a,b,c,d,e,f,g0,h0].forEach((v,i)=>{h[i]=(h[i]+v)>>>0;});
+    }
+    return h.map(v => v.toString(16).padStart(8,'0')).join('');
+  }
+  function journalEnvelope(previous, marker, candidate) {
+    const payload = JSON.stringify({ v: 1, previous, marker, candidateDigest: checksum(candidate) });
+    return JSON.stringify({ payload, checksum: checksum(payload) });
+  }
+  function decodeJournal(raw) {
+    if (typeof raw !== 'string') throw new Error('Recovery snapshot is missing.');
+    const envelope = JSON.parse(raw);
+    if (!plain(envelope) || typeof envelope.payload !== 'string' || envelope.checksum !== checksum(envelope.payload)) throw new Error('Recovery snapshot integrity check failed.');
+    const payload = JSON.parse(envelope.payload);
+    if (!plain(payload) || payload.v !== 1 || !(payload.previous === null || typeof payload.previous === 'string') || !(payload.marker === null || typeof payload.marker === 'string') || typeof payload.candidateDigest !== 'string' || !/^[a-f0-9]{64}$/.test(payload.candidateDigest)) throw new Error('Recovery snapshot format is invalid.');
+    return payload;
+  }
+  function exactSet(key, value) {
+    g.localStorage.setItem(key, value);
+    if (g.localStorage.getItem(key) !== value) throw new Error(`${key} verification did not match.`);
+  }
+  function retireJournal() {
+    // Removing the commit first makes any interruption conservatively roll back.
+    g.localStorage.removeItem(COMMIT_KEY);
+    if (g.localStorage.getItem(COMMIT_KEY) !== null) throw new Error('Recovery commit marker could not be retired.');
+    g.localStorage.removeItem(JOURNAL_KEY);
+    if (g.localStorage.getItem(JOURNAL_KEY) !== null) throw new Error('Recovery snapshot could not be retired.');
+  }
+  function recoverInterruptedWrite() {
+    const snapshotRaw = g.localStorage.getItem(JOURNAL_KEY), commitRaw = g.localStorage.getItem(COMMIT_KEY);
+    if (snapshotRaw === null && commitRaw === null) return;
+    const current = g.localStorage.getItem(KEY);
+    if (snapshotRaw === null) {
+      throw new Error('Recovery commit has no matching snapshot.');
+    }
+    const prior = decodeJournal(snapshotRaw);
+    if (current !== null && current !== prior.previous && checksum(current) !== prior.candidateDigest) throw new Error('Current state matches neither the preserved state nor the pending candidate.');
+    let committed = false;
+    if (commitRaw !== null && current !== null) {
+      try {
+        const commit = JSON.parse(commitRaw);
+        committed = plain(commit) && commit.v === 1 && commit.current === prior.candidateDigest && checksum(current) === prior.candidateDigest && validState(JSON.parse(current), { requireCurrent: true }).v === 4;
+      } catch (e) { committed = false; }
+    }
+    if (!committed) {
+      if (prior.previous === null) g.localStorage.removeItem(KEY); else g.localStorage.setItem(KEY, prior.previous);
+      if (g.localStorage.getItem(KEY) !== prior.previous) throw new Error('Previous state could not be restored from the recovery snapshot.');
+      if (prior.marker === null) g.localStorage.removeItem(INSTALL_KEY); else g.localStorage.setItem(INSTALL_KEY, prior.marker);
+      if (g.localStorage.getItem(INSTALL_KEY) !== prior.marker) throw new Error('Previous installation marker could not be restored.');
+    }
+    retireJournal();
+  }
   function readRawRecords() {
     const records = [];
-    for (const key of [KEY, ...LEGACY_KEYS]) {
+    for (const key of [KEY, ...LEGACY_KEYS, INSTALL_KEY, JOURNAL_KEY, COMMIT_KEY]) {
       try { const raw = g.localStorage.getItem(key); if (raw !== null) records.push({ key, raw }); }
       catch (e) { records.push({ key, raw: null, readError: String(e && e.name || 'StorageError') }); }
     }
@@ -371,39 +440,63 @@
   }
   function writeState(candidate, resolving, failureReason = 'write-failure') {
     if (recovery && !resolving) return false;
-    let previous = null, serialized = null, writeStarted = false, observedAfterWrite = null, verificationMismatch = false;
+    let previous = null, previousMarker = null, serialized = null, writeStarted = false, observedAfterWrite = null, verificationMismatch = false, markerWriteFailed = false, snapshotReady = false;
     try {
       const state = validState(candidate, { requireCurrent: true });
       serialized = JSON.stringify(state);
       if (typeof serialized !== 'string') throw new Error('State could not be serialized.');
       previous = g.localStorage.getItem(KEY);
+      previousMarker = g.localStorage.getItem(INSTALL_KEY);
       if (!resolving && previous !== lastKnownRaw) {
         setRecovery('concurrent-write', readRawRecords().concat(previous !== null ? [{ key: KEY, raw: previous }] : []), serialized);
         return false;
       }
+      // Remove only an orphan commit after verifying its record; never overwrite an unretired snapshot.
+      if (g.localStorage.getItem(JOURNAL_KEY) !== null) throw new Error('An earlier recovery snapshot requires startup reconciliation.');
+      const oldCommit = g.localStorage.getItem(COMMIT_KEY);
+      if (oldCommit !== null) {
+        const parsedCommit = JSON.parse(oldCommit);
+        if (!plain(parsedCommit) || parsedCommit.v !== 1 || previous === null || parsedCommit.current !== checksum(previous) || validState(JSON.parse(previous), { requireCurrent: true }).v !== 4) throw new Error('An earlier recovery commit cannot be verified.');
+        g.localStorage.removeItem(COMMIT_KEY);
+        if (g.localStorage.getItem(COMMIT_KEY) !== null) throw new Error('An earlier recovery commit could not be retired.');
+      }
+      const journalRaw = journalEnvelope(previous, previousMarker, serialized);
+      exactSet(JOURNAL_KEY, journalRaw);
+      snapshotReady = true;
       writeStarted = true;
       g.localStorage.setItem(KEY, serialized);
       observedAfterWrite = g.localStorage.getItem(KEY);
       if (observedAfterWrite !== serialized) { verificationMismatch = true; throw new Error('Storage verification did not match the saved data.'); }
+      try { ensureInstallMarker(); }
+      catch (markerError) { markerWriteFailed = true; throw markerError; }
+      exactSet(COMMIT_KEY, JSON.stringify({ v: 1, current: checksum(serialized) }));
       lastKnownRaw = serialized;
+      retireJournal();
       if (resolving) {
         recovery = null;
         for (const key of LEGACY_KEYS) { try { g.localStorage.removeItem(key); } catch (e) { /* current verified record remains authoritative */ } }
       }
       return true;
     } catch (e) {
-      let rollbackVerified = !writeStarted;
-      if (writeStarted && !verificationMismatch) {
+      let rollbackVerified = !writeStarted && !markerWriteFailed;
+      if (writeStarted && snapshotReady && !verificationMismatch && (!markerWriteFailed || previous !== null)) {
         try {
           if (previous === null) g.localStorage.removeItem(KEY); else g.localStorage.setItem(KEY, previous);
           rollbackVerified = g.localStorage.getItem(KEY) === previous;
         } catch (rollbackError) { rollbackVerified = false; }
-      } else if (verificationMismatch) rollbackVerified = false;
+      } else if (verificationMismatch || markerWriteFailed) rollbackVerified = false;
       console.warn('HunterArsenal: save failed; recovery is required.', e);
-      const reason = verificationMismatch ? 'concurrent-write' : rollbackVerified ? failureReason : 'rollback-failure';
+      const reason = markerWriteFailed ? (previous === null || rollbackVerified ? 'marker-write-failure' : 'rollback-failure') : verificationMismatch ? 'concurrent-write' : rollbackVerified ? failureReason : 'rollback-failure';
       setRecovery(reason, readRawRecords().concat(previous !== null ? [{ key: KEY, raw: previous }] : [], observedAfterWrite !== null ? [{ key: KEY, raw: observedAfterWrite }] : []), serialized);
       return false;
     }
+  }
+  function ensureInstallMarker() {
+    const marker = g.localStorage.getItem(INSTALL_KEY);
+    if (marker === INSTALL_MARKER) return;
+    if (marker !== null) throw new Error('Installation marker is malformed or unsupported.');
+    g.localStorage.setItem(INSTALL_KEY, INSTALL_MARKER);
+    if (g.localStorage.getItem(INSTALL_KEY) !== INSTALL_MARKER) throw new Error('Installation marker verification did not match.');
   }
   function load() {
     if (recovery) {
@@ -411,15 +504,20 @@
       recovery = null; // Explicit retry path: only a failed migration may be retried from its preserved source.
     }
     lastKnownRaw = null;
-    let current, legacy = null;
+    let current, marker, legacy = null;
     try {
+      recoverInterruptedWrite();
       current = g.localStorage.getItem(KEY);
+      marker = g.localStorage.getItem(INSTALL_KEY);
       if (current === null) {
         for (const key of LEGACY_KEYS) { const raw = g.localStorage.getItem(key); if (raw !== null) { legacy = { key, raw }; break; } }
       }
     } catch (e) { return failLoad('read-failure', KEY, null, e); }
     const source = current !== null ? { key: KEY, raw: current } : legacy;
-    if (!source) return defaults();
+    if (!source) {
+      if (marker !== null) return failLoad('missing-saved-record', KEY, null, new Error('Installation marker exists but saved data is missing.'));
+      return defaults();
+    }
     lastKnownRaw = current;
     let parsed, state;
     try {
@@ -435,6 +533,9 @@
     if (source.key !== KEY || oldVersion) {
       if (!writeState(state, false, 'migration-failure')) return null;
       if (source.key !== KEY) { try { g.localStorage.removeItem(source.key); } catch (e) { /* verified current record is already authoritative */ } }
+    } else if (marker !== INSTALL_MARKER) {
+      try { ensureInstallMarker(); }
+      catch (e) { return failLoad('marker-write-failure', INSTALL_KEY, null, e); }
     }
     if (source.key === KEY && !oldVersion) lastKnownRaw = source.raw;
     return state;
@@ -455,17 +556,28 @@
     return JSON.stringify({ app: 'HunterArsenal', format: 'recovery-export', exportedAt: new Date().toISOString(), reason: recovery.reason, records: recovery.records, candidate: recovery.candidate }, null, 2);
   }
   function exportJSON(S) {
-    return JSON.stringify({ app: 'HunterArsenal', version: g.APP_VERSION, exportedAt: new Date().toISOString(), data: S }, null, 2);
+    const state = validState(S, { requireCurrent: true });
+    return JSON.stringify({ app: 'HunterArsenal', format: 'backup', formatVersion: 1, version: g.APP_VERSION, exportedAt: new Date().toISOString(), data: state }, null, 2);
   }
   function importJSON(text) {
     if (typeof text !== 'string' || text.length > 8e6) throw new Error('File too large or invalid.');
     const j = JSON.parse(text);
+    const hasFormat = Object.prototype.hasOwnProperty.call(j || {}, 'format');
+    const hasFormatVersion = Object.prototype.hasOwnProperty.call(j || {}, 'formatVersion');
+    if (hasFormat || hasFormatVersion) {
+      if (j.format !== 'backup' || j.formatVersion !== 1) throw new Error('Unsupported or malformed backup format.');
+    }
     const data = j && j.app === 'HunterArsenal' && j.data ? j.data : null;
     if (!data) throw new Error('Not a HunterArsenal backup');
     const legacy = data.v === undefined || Number(data.v) < 4;
     return validState(data, { allowMissingVersion: legacy, requireCurrent: !legacy, requireLegacyBackup: legacy });
   }
   function wipe() { return reset(); }
+  async function requestPersistentStorage(storage) {
+    if (!storage || typeof storage.persist !== 'function') return 'unavailable';
+    try { return await storage.persist() ? 'granted' : 'denied'; }
+    catch (e) { return 'unavailable'; }
+  }
 
-  HA.Store = { KEY, defaults, sanitize, load, save, restore, reset, isRecoveryRequired, recoveryInfo, exportRecovery, exportJSON, importJSON, wipe, uid, validateInput };
+  HA.Store = { KEY, defaults, sanitize, load, save, restore, reset, isRecoveryRequired, recoveryInfo, exportRecovery, exportJSON, importJSON, wipe, uid, validateInput, requestPersistentStorage };
 })(typeof self !== 'undefined' ? self : window);

@@ -1,18 +1,40 @@
 /* Run with: node tests_engine.js   (no dependencies) */
-const fs = require('fs'), vm = require('vm'), path = require('path');
+const fs = require('fs'), vm = require('vm'), path = require('path'), { TextEncoder, TextDecoder } = require('util');
 const store = {};
-const ctx = { console, crypto: require('crypto').webcrypto, localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; }, removeItem: k => { delete store[k]; } } };
+const ctx = { console, crypto: require('crypto').webcrypto, TextEncoder, TextDecoder, localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; }, removeItem: k => { delete store[k]; } } };
 ctx.self = ctx; ctx.window = ctx; vm.createContext(ctx);
 for (const f of ['version', 'gamification', 'storage']) vm.runInContext(fs.readFileSync(path.join(__dirname, 'js', f + '.js'), 'utf8'), ctx, { filename: f });
 const { Game: G, Store } = ctx.HA;
+const securityCtx = { console, crypto: require('crypto').webcrypto, TextEncoder, TextDecoder, document: { addEventListener() {} }, localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, addEventListener() {} };
+securityCtx.self = securityCtx; securityCtx.window = securityCtx; vm.createContext(securityCtx);
+vm.runInContext(fs.readFileSync(path.join(__dirname, 'js', 'security.js'), 'utf8'), securityCtx, { filename: 'security' });
 let fails = 0; const assert = (c, m) => { if (!c) { fails++; console.error('FAIL', m); } else console.log('ok  ', m); };
+const asyncChecks = [];
 const mk = (id, attr, created) => ({ id, name: id, desc: '', icon: 'target', attr, days: null, created: created || '2026-01-01', archived: false });
 function isolatedStore(initial = {}, sharedData = null) {
-  const data = sharedData || { ...initial }, flags = { failGet: false, failSet: false, failRemove: false, failGetOnCall: 0, failSetOnCall: 0, replaceOnGetCall: 0, replaceValue: null, getCalls: 0, setCalls: 0 };
-  const c = { console: { warn() {} }, crypto: require('crypto').webcrypto, localStorage: {
-    getItem(k) { flags.getCalls++; if (flags.replaceOnGetCall === flags.getCalls) data[k] = flags.replaceValue; if (flags.failGet || flags.failGetOnCall === flags.getCalls) throw new Error('read blocked'); return Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null; },
-    setItem(k, v) { flags.setCalls++; if (flags.failSet || flags.failSetOnCall === flags.setCalls) throw new Error('write blocked'); data[k] = String(v); },
-    removeItem(k) { if (flags.failRemove) throw new Error('remove blocked'); delete data[k]; }
+  const data = sharedData || { ...initial }, flags = { failGet: false, failSet: false, failRemove: false, failGetOnCall: 0, failSetOnCall: 0, replaceOnGetCall: 0, replaceValue: null, getCalls: 0, setCalls: 0,
+    failNextGetKey: null, failNextSetKey: null, quotaSetKey: null, writeThenThrowKey: null, failNextRemoveKey: null, failNextSetAfterReadbackKey: null, failGetKeyOccurrence: {}, failSetKeyOccurrence: {}, getKeyCounts: {}, setKeyCounts: {}, failReadbackAfterSetKey: null, failReadbackArmed: false, readbackMismatchAfterSetKey: null, readbackMismatchArmed: false, readbackMismatchValue: null, injectedFailures: [], operations: [], captureAfterSetKey: null, captureAfterReadbackKey: null, captureAfterRemoveKey: null, captureArmed: false, capturedData: null };
+  const capture = (phase, key) => { flags.injectedFailures.push({ phase, key }); flags.capturedData = { ...data }; };
+  const c = { console: { warn() {} }, crypto: require('crypto').webcrypto, TextEncoder, TextDecoder, localStorage: {
+    getItem(k) { flags.getCalls++; flags.getKeyCounts[k] = (flags.getKeyCounts[k] || 0) + 1; flags.operations.push({ op: 'get', key: k });
+      if (flags.replaceOnGetCall === flags.getCalls) data[k] = flags.replaceValue;
+      if (flags.failGet || flags.failGetOnCall === flags.getCalls || flags.failNextGetKey === k || flags.failGetKeyOccurrence[k] === flags.getKeyCounts[k] || (flags.failReadbackAfterSetKey === k && flags.failReadbackArmed)) {
+        if (flags.failNextGetKey === k) flags.failNextGetKey = null;
+        if (flags.failReadbackAfterSetKey === k && flags.failReadbackArmed) { flags.injectedFailures.push({ phase: 'readback', key: k }); flags.failReadbackAfterSetKey = null; flags.failReadbackArmed = false; if (flags.failNextSetAfterReadbackKey === k) flags.failNextSetKey = k; }
+        throw new Error(`read blocked: ${k}`);
+      }
+      if (flags.readbackMismatchAfterSetKey === k && flags.readbackMismatchArmed) { flags.readbackMismatchArmed = false; flags.readbackMismatchAfterSetKey = null; data[k] = flags.readbackMismatchValue; }
+      const value = Object.prototype.hasOwnProperty.call(data, k) ? data[k] : null;
+      if (flags.captureAfterReadbackKey === k && flags.captureArmed) { flags.captureArmed = false; capture('readback', k); }
+      return value; },
+    setItem(k, v) { flags.setCalls++; flags.setKeyCounts[k] = (flags.setKeyCounts[k] || 0) + 1; flags.operations.push({ op: 'set', key: k });
+      if (flags.quotaSetKey === k) { flags.injectedFailures.push({ phase: 'quota', key: k }); const e = new Error(`quota exceeded: ${k}`); e.name = 'QuotaExceededError'; throw e; }
+      if (flags.failSet || flags.failSetOnCall === flags.setCalls || flags.failNextSetKey === k || flags.failSetKeyOccurrence[k] === flags.setKeyCounts[k]) { if (flags.failNextSetKey === k) flags.failNextSetKey = null; flags.injectedFailures.push({ phase: 'write', key: k }); throw new Error(`write blocked: ${k}`); }
+      data[k] = String(v); if (flags.writeThenThrowKey === k) { flags.writeThenThrowKey = null; flags.injectedFailures.push({ phase: 'partial-write', key: k }); throw new Error(`write stored then threw: ${k}`); }
+      if (flags.failReadbackAfterSetKey === k) flags.failReadbackArmed = true; if (flags.readbackMismatchAfterSetKey === k) flags.readbackMismatchArmed = true;
+      if (flags.captureAfterSetKey === k) capture('write', k);
+      if (flags.captureAfterReadbackKey === k) flags.captureArmed = true; },
+    removeItem(k) { flags.operations.push({ op: 'remove', key: k }); if (flags.failRemove || flags.failNextRemoveKey === k) { if (flags.failNextRemoveKey === k) flags.failNextRemoveKey = null; throw new Error(`remove blocked: ${k}`); } delete data[k]; if (flags.captureAfterRemoveKey === k) capture('remove', k); }
   } };
   c.self = c; c.window = c; vm.createContext(c);
   for (const f of ['version', 'gamification', 'storage']) vm.runInContext(fs.readFileSync(path.join(__dirname, 'js', f + '.js'), 'utf8'), c, { filename: `isolated-${f}` });
@@ -103,7 +125,7 @@ const mig = Store.load(); assert(mig.habits[0].id === 'old' && G.totalXP(mig) ==
 {
   const x = isolatedStore(), fresh = x.Store.load();
   assert(fresh && fresh.v === 4 && !x.Store.isRecoveryRequired() && !x.data['hunterarsenal.v3'], 'no saved data produces in-memory defaults without recovery');
-  assert(x.Store.save(fresh) && x.data['hunterarsenal.v3'], 'a valid initial state can be saved');
+  assert(x.Store.save(fresh) && x.data['hunterarsenal.v3'] && x.data['hunterarsenal.install.v1'] === 'initialized', 'a valid initial state and verified installation marker are saved');
   fresh.profile.name = 'Existing Hunter'; fresh.habits.push(vm.runInContext(`JSON.parse(${JSON.stringify(JSON.stringify(mk('saved', 'INT')))})`, x.c)); fresh.streak.combo = 9;
   assert(x.Store.save(fresh), 'valid candidate save succeeds');
   const loaded = x.Store.load();
@@ -111,6 +133,103 @@ const mig = Store.load(); assert(mig.habits[0].id === 'old' && G.totalXP(mig) ==
   loaded.habits.push(vm.runInContext(`JSON.parse(${JSON.stringify(JSON.stringify(mk('active', 'STR')))})`, x.c));
   x.Game.toggleHabit(loaded, 'active', '2026-10-08', Date.now()); x.Game.refreshDay(loaded, '2026-10-08');
   assert(x.Store.save(loaded), 'ordinary habit completion and its daily record pass current-schema validation');
+}
+{
+  const x = isolatedStore(), S = x.Store.load();
+  assert(x.Store.save(S), 'initial marker test state is committed');
+  delete x.data['hunterarsenal.v3'];
+  const restarted = isolatedStore(x.data);
+  assert(restarted.Store.load() === null && restarted.Store.isRecoveryRequired() && restarted.Store.recoveryInfo().reason === 'missing-saved-record', 'missing state after initialization enters recovery instead of returning defaults');
+  assert(restarted.data['hunterarsenal.install.v1'] === 'initialized', 'missing-state recovery preserves the installation marker');
+}
+{
+  const state = Store.defaults(); state.profile.name = 'Existing v4 Hunter';
+  const x = isolatedStore({ 'hunterarsenal.v3': JSON.stringify(state) });
+  const loaded = x.Store.load();
+  assert(loaded && loaded.profile.name === 'Existing v4 Hunter' && x.data['hunterarsenal.install.v1'] === 'initialized', 'existing valid v4 state adopts the marker without replacing its progress');
+}
+{
+  const state = Store.defaults(); state.profile.name = 'Marker Integrity';
+  const raw = JSON.stringify(state), x = isolatedStore({ 'hunterarsenal.v3': raw, 'hunterarsenal.install.v1': 'future-marker' });
+  assert(x.Store.load() === null && x.Store.isRecoveryRequired() && x.data['hunterarsenal.v3'] === raw && x.data['hunterarsenal.install.v1'] === 'future-marker', 'malformed or unsupported initialization marker enters recovery without modifying valid progress');
+  const noState = isolatedStore({ 'hunterarsenal.install.v1': 'future-marker' });
+  assert(noState.Store.load() === null && noState.Store.isRecoveryRequired(), 'unsupported marker with missing state is not treated as a new installation');
+}
+asyncChecks.push(Promise.all([
+  Store.requestPersistentStorage({ persist: async () => true }),
+  Store.requestPersistentStorage({ persist: async () => false }),
+  Store.requestPersistentStorage(null),
+  Store.requestPersistentStorage({ persist: async () => { throw new Error('permission request rejected'); } })
+]).then(results => {
+  assert(results.join('|') === 'granted|denied|unavailable|unavailable', 'persistent storage grant, denial, absence, and rejection are reported distinctly');
+}));
+{
+  const sec = securityCtx.HA.Security._test, code = sec.makeResetCode();
+  assert(/^\d{5}$/.test(code), 'reset confirmation generates a five-digit code');
+  assert(sec.resetCodeMatches(code, code), 'correct reset confirmation code is accepted');
+  assert(!sec.resetCodeMatches(code, '00000') && !sec.resetCodeMatches(code, ''), 'incorrect and empty reset confirmation codes are rejected');
+  assert(!sec.resetCodeMatches(code, null), 'dismissed or cancelled reset confirmation cannot validate');
+  const appSource = fs.readFileSync(path.join(__dirname, 'js', 'app.js'), 'utf8');
+  const securitySource = fs.readFileSync(path.join(__dirname, 'js', 'security.js'), 'utf8');
+  assert(appSource.includes('confirmed = await HA.Security.confirmDataReset()') && appSource.includes('if (!confirmed)') && securitySource.includes('if (!(await confirmDataReset())) return;'), 'normal and App Lock recovery resets both require explicit five-digit confirmation');
+  assert(securitySource.includes("if (e.key === 'Escape') { e.stopPropagation(); done(null); }") && securitySource.includes("b.dataset.sx === 'ok' ? go() : done(null)"), 'cancel and dismissal resolve without confirmation');
+  const appResetFn = appSource.match(/async function resetAll\(\) \{[\s\S]*?\n\}/)[0];
+  const forgotFn = securitySource.match(/async function forgot\(\) \{[\s\S]*?\n  \}/)[0];
+  function makeAppResetRoute(confirm) {
+    const deps = { confirms: 0, resets: 0, notice: null, state: { profile: { name: 'Saved' } }, resetResult: true };
+    deps.HA = { Security: { async confirmDataReset() { deps.confirms++; return typeof confirm === 'function' ? confirm() : confirm; } } };
+    deps.Store = { reset() { deps.resets++; return deps.resetResult ? { ok: true, state: { profile: { name: 'Reset' } } } : { ok: false, state: null }; } };
+    deps.Notice = { show(n) { deps.notice = n; } };
+    const c = { deps }; vm.createContext(c);
+    vm.runInContext(`const HA=deps.HA, Store=deps.Store, Notice=deps.Notice; let S=deps.state, lastSavedState=deps.state, ob=null, view='settings', homeTab='today', bonusSub=null, profileSub=null, resetFlowPending=false; const applyTheme=()=>{}, render=()=>{}, openOnboarding=()=>{}; ${appResetFn}; globalThis.invoke=resetAll; globalThis.inspect=()=>({S,resetFlowPending});`, c);
+    return { c, deps };
+  }
+  function makeForgotRoute({ firstAsk, confirm, resetResult = true }) {
+    const deps = { asks: 0, confirms: 0, resets: 0, cfgClears: 0, reloads: 0, notifications: 0, resetResult };
+    const c = { deps }; vm.createContext(c);
+    vm.runInContext(`const HA={Store:{reset(){deps.resets++;return deps.resetResult?{ok:true,state:{}}:{ok:false,state:null}}}}, g={location:{reload(){deps.reloads++}}}; let forgotPending=false; const ask=async()=>{deps.asks++;return deps.firstAsk()}, confirmDataReset=async()=>{deps.confirms++;return deps.confirm()}, putCfg=x=>{if(x===null)deps.cfgClears++;return true}, notify=async()=>{deps.notifications++}; ${forgotFn}; globalThis.invoke=forgot;`, Object.assign(c, { deps: Object.assign(deps, { firstAsk, confirm }) }));
+    return { c, deps };
+  }
+  asyncChecks.push((async () => {
+    const cancel = makeAppResetRoute(false); await cancel.c.invoke(); assert(cancel.deps.confirms === 1 && cancel.deps.resets === 0 && !cancel.deps.notice, 'normal reset handler cancellation never reaches Store.reset');
+    let release; const pending = makeAppResetRoute(() => new Promise(r => { release = r; })); const first = pending.c.invoke(); await pending.c.invoke(); assert(pending.deps.confirms === 1 && pending.deps.resets === 0, 'repeated normal reset invocation is gated while code confirmation is pending'); release(true); await first; await pending.c.invoke(); assert(pending.deps.confirms === 1, 'normal reset remains gated until final confirmation is resolved'); pending.deps.notice.secondary.onClick(); assert(pending.deps.resets === 0 && !pending.c.inspect().resetFlowPending, 'final reset cancellation and dismissal release the guard without erasing');
+    const success = makeAppResetRoute(true); await success.c.invoke(); success.deps.notice.primary.onClick(); success.deps.notice.primary.onClick(); assert(success.deps.confirms === 1 && success.deps.resets === 1 && success.c.inspect().S.profile.name === 'Reset', 'normal reset executes once only after fresh code confirmation and final user confirmation');
+    const failed = makeAppResetRoute(true); failed.deps.resetResult = false; await failed.c.invoke(); failed.deps.notice.primary.onClick(); assert(failed.deps.resets === 1 && failed.c.inspect().S.profile.name === 'Saved', 'normal reset write failure leaves current app state unchanged');
+
+    const forgottenCancel = makeForgotRoute({ firstAsk: async () => null, confirm: async () => true }); await forgottenCancel.c.invoke(); assert(forgottenCancel.deps.asks === 1 && forgottenCancel.deps.confirms === 0 && forgottenCancel.deps.resets === 0, 'App Lock forgotten-passcode dismissal does not reset data');
+    const forgottenWrong = makeForgotRoute({ firstAsk: async () => ({ w: 'ERASE' }), confirm: async () => false }); await forgottenWrong.c.invoke(); assert(forgottenWrong.deps.confirms === 1 && forgottenWrong.deps.resets === 0, 'App Lock forgotten-passcode route requires the fresh code after ERASE text');
+    let releaseAsk; const forgottenRepeat = makeForgotRoute({ firstAsk: () => new Promise(r => { releaseAsk = r; }), confirm: async () => true }); const f1 = forgottenRepeat.c.invoke(); await forgottenRepeat.c.invoke(); assert(forgottenRepeat.deps.asks === 1 && forgottenRepeat.deps.resets === 0, 'repeated App Lock recovery invocation is gated during its prompt'); releaseAsk(null); await f1; assert(forgottenRepeat.deps.resets === 0, 'dismissed App Lock prompt cannot reset');
+    const forgottenSuccess = makeForgotRoute({ firstAsk: async () => ({ w: 'ERASE' }), confirm: async () => true }); await forgottenSuccess.c.invoke(); assert(forgottenSuccess.deps.resets === 1 && forgottenSuccess.deps.cfgClears === 1 && forgottenSuccess.deps.reloads === 1, 'App Lock reset executes and reloads only after both explicit confirmations');
+    const forgottenWriteFail = makeForgotRoute({ firstAsk: async () => ({ w: 'ERASE' }), confirm: async () => true, resetResult: false }); await forgottenWriteFail.c.invoke(); assert(forgottenWriteFail.deps.resets === 1 && forgottenWriteFail.deps.cfgClears === 0 && forgottenWriteFail.deps.reloads === 0 && forgottenWriteFail.deps.notifications === 1, 'App Lock reset write failure preserves lock and reports failure without reload');
+
+    const saveSource = appSource.match(/const save = \(\) => \{[\s\S]*?\n\};/)[0], mutateSource = appSource.match(/function mutate\(fn\) \{[\s\S]*?\n\}/)[0];
+    const mutationCtx = { saveCalls: 0, renders: 0, announcements: 0 }; vm.createContext(mutationCtx);
+    vm.runInContext(`const Store={isRecoveryRequired:()=>false,save:()=>{saveCalls++;return false}}, G={refreshDay:()=>({}),checkUnlocks:()=>({fresh:{}})}; let S={profile:{name:'Verified'},days:{},streak:{},habits:[]}, lastSavedState=JSON.parse(JSON.stringify(S)); const snap=()=>({}), today=()=> '2026-01-01', render=()=>{renders++}, announce=()=>{announcements++}; ${saveSource}; ${mutateSource}; globalThis.run=()=>mutate(()=>{S.profile.name='Unpersisted Candidate'}); globalThis.state=()=>S;`, mutationCtx);
+    const mutationResult = mutationCtx.run(); assert(mutationResult === null && mutationCtx.state().profile.name === 'Verified' && mutationCtx.saveCalls === 1 && mutationCtx.announcements === 0, 'failed application mutation restores last verified in-memory state and emits no progression success');
+
+    const confirmSource = securitySource.match(/async function confirmDataReset\(\) \{[\s\S]*?\n  \}/)[0], codeSource = securitySource.match(/function makeResetCode\(\) \{[\s\S]*?\n  \}/)[0];
+    const confirmCtx = { crypto: require('crypto').webcrypto, mode: 'wrong', prompt: null, notifications: 0 }; confirmCtx.self = confirmCtx; confirmCtx.window = confirmCtx; vm.createContext(confirmCtx);
+    vm.runInContext(`const g=globalThis; function makeResetCode() ${codeSource.slice(codeSource.indexOf('{'))}; const resetCodeMatches=(expected,entered)=>typeof expected==='string'&&/^\\d{5}$/.test(expected)&&entered===expected; const notify=async()=>{notifications++}; const ask=async o=>{prompt=o;const code=(o.body.match(/<b>(\\d{5})<\\/b>/)||[])[1];return mode==='cancel'?null:mode==='correct'?{code}:{code:'00000'}}; ${confirmSource}; globalThis.confirm=confirmDataReset;`, confirmCtx);
+    const denied = await confirmCtx.confirm(), prompt = confirmCtx.prompt, shownCode = prompt.body.match(/<b>(\d{5})<\/b>/)[1];
+    assert(!denied && /^\d{5}$/.test(shownCode) && (await prompt.validate({ code: '00000' })) !== '' && await prompt.validate({ code: shownCode }) === '', 'actual reset-code prompt rejects wrong digits and accepts only its fresh exact five-digit code');
+    confirmCtx.mode = 'cancel'; assert(!(await confirmCtx.confirm()), 'actual reset-code prompt cancellation cannot confirm');
+    confirmCtx.mode = 'correct'; assert(await confirmCtx.confirm(), 'actual reset-code prompt accepts its displayed code');
+  })());
+}
+{
+  const x = isolatedStore(), S = x.Store.load();
+  x.flags.failNextSetKey = 'hunterarsenal.install.v1'; // target marker creation by key
+  assert(!x.Store.save(S) && x.Store.isRecoveryRequired(), 'installation marker write failure is surfaced as recovery');
+  assert(!!x.data['hunterarsenal.v3'] && !x.data['hunterarsenal.install.v1'], 'verified initial state is retained when marker creation fails');
+  const restarted = isolatedStore(x.data);
+  assert(restarted.Store.load() && restarted.data['hunterarsenal.v3'] === undefined && !restarted.data['hunterarsenal.install.v1'], 'restart rolls back an uncommitted first-install state instead of treating it as established progress');
+  assert(restarted.Store.save(restarted.Store.load()) && restarted.data['hunterarsenal.install.v1'] === 'initialized', 'a later explicit verified initial save establishes state and marker');
+}
+{
+  const x = isolatedStore(), S = x.Store.load(); assert(x.Store.save(S), 'existing-state marker rollback baseline saved');
+  const previous = x.data['hunterarsenal.v3']; delete x.data['hunterarsenal.install.v1'];
+  x.flags.failNextSetKey = 'hunterarsenal.install.v1'; S.profile.name = 'Do not replace';
+  assert(!x.Store.save(S) && x.data['hunterarsenal.v3'] === previous && x.Store.isRecoveryRequired(), 'marker failure rolls back to the prior state when one exists');
 }
 {
   const raw = '{bad saved json', x = isolatedStore({ 'hunterarsenal.v3': raw });
@@ -245,23 +364,89 @@ const mig = Store.load(); assert(mig.habits[0].id === 'old' && G.totalXP(mig) ==
 }
 {
   const x = isolatedStore(), S = x.Store.load(); assert(x.Store.save(S), 'verification-read test baseline saved');
-  const before = x.data['hunterarsenal.v3']; x.flags.failGetOnCall = x.flags.getCalls + 2; S.profile.name = 'Verification Failure';
+  const before = x.data['hunterarsenal.v3']; x.flags.failReadbackAfterSetKey = 'hunterarsenal.v3'; S.profile.name = 'Verification Failure';
   assert(!x.Store.save(S) && x.Store.isRecoveryRequired() && x.data['hunterarsenal.v3'] === before, 'verification read failure is not success and rollback restores the prior record');
 }
 {
   const x = isolatedStore(), S = x.Store.load(); x.Store.save(S);
   const other = JSON.parse(x.data['hunterarsenal.v3']); other.profile.name = 'Concurrent Tab';
-  const otherRaw = JSON.stringify(other); x.flags.replaceOnGetCall = x.flags.getCalls + 2; x.flags.replaceValue = otherRaw;
+  const otherRaw = JSON.stringify(other); x.flags.readbackMismatchAfterSetKey = 'hunterarsenal.v3'; x.flags.readbackMismatchValue = otherRaw;
   S.profile.name = 'Current Tab';
   assert(!x.Store.save(S) && x.Store.isRecoveryRequired() && x.data['hunterarsenal.v3'] === otherRaw, 'verification mismatch preserves the observed concurrent record instead of rolling it back');
 }
 {
   const x = isolatedStore(), S = x.Store.load(); x.Store.save(S); const before = x.data['hunterarsenal.v3'];
-  x.flags.failGetOnCall = x.flags.getCalls + 2; x.flags.failSetOnCall = x.flags.setCalls + 2; S.profile.name = 'Rollback Failure';
+  x.flags.failReadbackAfterSetKey = 'hunterarsenal.v3'; x.flags.failNextSetAfterReadbackKey = 'hunterarsenal.v3'; S.profile.name = 'Rollback Failure';
   assert(!x.Store.save(S) && x.Store.recoveryInfo().reason === 'rollback-failure', 'rollback failure remains in recovery and blocks normal saves');
   assert(JSON.parse(x.Store.exportRecovery()).records.some(r => r.raw === before), 'rollback failure retains previous bytes for recovery export');
   const restarted = isolatedStore(x.data), recovered = restarted.Store.load();
-  assert(recovered && recovered.profile.name === 'Rollback Failure', 'restart after rollback failure loads the verified-shape candidate rather than defaults');
+  assert(recovered && recovered.profile.name === 'Hunter', 'restart after rollback failure restores the prior verified state instead of accepting the uncommitted candidate');
+}
+{
+  const K = 'hunterarsenal.v3', J = 'hunterarsenal.recovery.v1', C = 'hunterarsenal.recovery.commit.v1', M = 'hunterarsenal.install.v1';
+  const prepared = () => { const x = isolatedStore(), first = x.Store.load(); assert(x.Store.save(first), 'journal fixture establishes a verified baseline'); first.profile.name = 'Prior Verified'; assert(x.Store.save(first), 'journal fixture saves prior verified progress'); return x; };
+  const candidate = x => { const s = vm.runInContext(`JSON.parse(${JSON.stringify(x.data[K])})`, x.c); s.profile.name = 'Uncommitted Candidate'; return s; };
+  const expectPriorAfterRestart = (x, label, expectedPrior) => {
+    const beforeRestart = { current: x.data[K], snapshot: x.data[J], commit: x.data[C] };
+    const restarted = isolatedStore(x.data), recovered = restarted.Store.load();
+    assert(recovered && recovered.profile.name === 'Prior Verified' && restarted.data[K] === expectedPrior, `${label}: fresh startup restores the exact prior verified bytes`);
+    assert(!restarted.data[J] && !restarted.data[C], `${label}: recovery snapshot and commit are retired only after restoration verifies`);
+    assert((beforeRestart.current == null || typeof beforeRestart.current === 'string') && typeof beforeRestart.snapshot === 'string', `${label}: current and snapshot bytes were captured before restart`);
+    return restarted;
+  };
+
+  // Snapshot write, read-back, and candidate write failures are independently targeted by key.
+  { const x = prepared(), old = x.data[K], commit = x.data[C]; x.flags.failNextSetKey = J; assert(!x.Store.save(candidate(x)) && x.data[K] === old && !x.data[J] && x.data[C] === commit, 'snapshot write failure blocks candidate write before current state changes'); assert(x.flags.injectedFailures.some(f => f.phase === 'write' && f.key === J), 'snapshot write failure was injected at the journal key'); const restarted = isolatedStore(x.data); assert(restarted.Store.load().profile.name === 'Prior Verified' && restarted.data[K] === old, 'restart after snapshot write failure preserves prior bytes'); }
+  { const x = prepared(), old = x.data[K]; x.flags.quotaSetKey = J; assert(!x.Store.save(candidate(x)) && x.data[K] === old && !x.data[J], 'journal quota exhaustion blocks all writes to the current state'); assert(x.flags.injectedFailures.some(f => f.phase === 'quota' && f.key === J), 'quota failure was injected at journal preparation'); const r = isolatedStore(x.data); assert(r.Store.load().profile.name === 'Prior Verified' && r.data[K] === old, 'restart after journal quota failure preserves prior state'); }
+  { const x = prepared(), old = x.data[K]; x.flags.writeThenThrowKey = J; assert(!x.Store.save(candidate(x)) && x.data[K] === old && typeof x.data[J] === 'string', 'snapshot write stored-then-threw leaves the prior current record intact'); assert(x.flags.injectedFailures.some(f => f.phase === 'partial-write' && f.key === J), 'partial snapshot write failure was injected after the targeted key changed'); expectPriorAfterRestart(x, 'partial snapshot write failure', old); }
+  { const x = prepared(), old = x.data[K]; x.flags.failReadbackAfterSetKey = J; assert(!x.Store.save(candidate(x)) && x.data[K] === old && !!x.data[J], 'snapshot read-back failure blocks candidate write and retains snapshot bytes'); assert(x.flags.injectedFailures.some(f => f.phase === 'readback' && f.key === J), 'snapshot read-back failure was injected immediately after journal write'); expectPriorAfterRestart(x, 'snapshot read-back failure', old); }
+  { const x = prepared(), old = x.data[K]; x.flags.failNextSetKey = K; assert(!x.Store.save(candidate(x)) && x.data[K] === old && !!x.data[J], 'candidate write failure leaves the prior state and prepared snapshot intact'); expectPriorAfterRestart(x, 'candidate write failure', old); }
+  { const x = prepared(), old = x.data[K]; x.flags.writeThenThrowKey = K; assert(!x.Store.save(candidate(x)) && x.data[K] === old && !!x.data[J], 'candidate stored-then-threw is rolled back before save reports failure'); assert(x.flags.injectedFailures.some(f => f.phase === 'partial-write' && f.key === K), 'partial candidate write failure was injected at current-state write'); expectPriorAfterRestart(x, 'partial candidate write failure', old); }
+  { const x = prepared(), old = x.data[K]; x.flags.failReadbackAfterSetKey = K; assert(!x.Store.save(candidate(x)) && x.data[K] === old && !!x.data[J], 'candidate read-back failure rolls back to the prior bytes and retains journal'); assert(x.flags.injectedFailures.some(f => f.phase === 'readback' && f.key === K), 'candidate read-back failure was injected at current-state read-back'); expectPriorAfterRestart(x, 'candidate read-back failure', old); }
+  { const x = prepared(), old = x.data[K]; x.flags.failNextSetKey = C; assert(!x.Store.save(candidate(x)) && x.data[K] === old && !!x.data[J] && !x.data[C], 'commit write failure cannot leave the candidate authoritative'); expectPriorAfterRestart(x, 'commit write failure', old); }
+  { const x = prepared(), old = x.data[K]; x.flags.writeThenThrowKey = C; assert(!x.Store.save(candidate(x)) && x.data[K] === old && !!x.data[J] && typeof x.data[C] === 'string', 'commit stored-then-threw is rolled back while retaining the ambiguous commit record'); assert(x.flags.injectedFailures.some(f => f.phase === 'partial-write' && f.key === C), 'partial commit write failure was injected at commit-record write'); expectPriorAfterRestart(x, 'partial commit write failure', old); }
+  { const x = prepared(), old = x.data[K]; x.flags.failReadbackAfterSetKey = C; assert(!x.Store.save(candidate(x)) && x.data[K] === old && !!x.data[J], 'commit read-back failure rolls back and keeps recovery source'); assert(x.flags.injectedFailures.some(f => f.phase === 'readback' && f.key === C), 'commit read-back failure was injected at commit verification'); expectPriorAfterRestart(x, 'commit read-back failure', old); }
+
+  // Recovery itself can fail without retiring the only snapshot; a subsequent restart retries it.
+  { const x = prepared(), prior = x.data[K]; x.flags.failNextSetKey = C; x.Store.save(candidate(x)); const restart = isolatedStore(x.data); restart.flags.failNextSetKey = K; assert(restart.Store.load() === null && restart.Store.isRecoveryRequired() && restart.data[J], 'failed startup rollback enters recovery and leaves snapshot durable'); const retry = isolatedStore(restart.data), state = retry.Store.load(); assert(state && retry.data[K] === prior && !retry.data[J], 'later startup retries recovery from the preserved snapshot'); }
+
+  // Candidate bytes with no commit always roll back, including a missing current key.
+  { const x = prepared(), prior = x.data[K]; x.flags.failNextSetKey = C; x.Store.save(candidate(x)); delete x.data[K]; const restarted = expectPriorAfterRestart(x, 'missing current with valid snapshot', prior); assert(JSON.parse(restarted.data[K]).profile.name === 'Prior Verified', 'missing current is rebuilt from the only valid journal copy'); }
+
+  // Capture durable storage images at write boundaries to model abrupt termination.
+  { const x = prepared(), prior = x.data[K]; x.flags.captureAfterSetKey = J; assert(x.Store.save(candidate(x)), 'save completes while capturing immediately after snapshot write'); const image = x.flags.capturedData; assert(image[K] === prior && image[J] && !image[C], 'snapshot-write interruption image retains prior current state and no commit'); const r = isolatedStore(image), restored = r.Store.load(); assert(restored && r.data[K] === prior && !r.data[J], 'restart after snapshot write restores prior verified bytes'); }
+  { const x = prepared(), prior = x.data[K]; x.flags.captureAfterReadbackKey = J; assert(x.Store.save(candidate(x)), 'save completes while capturing after snapshot read-back'); const image = x.flags.capturedData; assert(image[K] === prior && image[J] && !image[C], 'snapshot-readback interruption image is prepared before candidate write'); const r = isolatedStore(image), restored = r.Store.load(); assert(restored && r.data[K] === prior && !r.data[J], 'restart after snapshot read-back preserves prior verified bytes'); }
+  { const x = prepared(), prior = x.data[K]; x.flags.captureAfterSetKey = K; assert(x.Store.save(candidate(x)), 'save completes while capturing immediately after candidate write'); const image = x.flags.capturedData; assert(image[K] !== prior && image[J] && !image[C], 'candidate-write interruption image has an uncommitted candidate and prior snapshot'); const r = isolatedStore(image), restored = r.Store.load(); assert(restored && r.data[K] === prior && !r.data[J], 'restart after candidate write rolls back before candidate read-back'); }
+  { const x = prepared(), prior = x.data[K]; x.flags.captureAfterReadbackKey = K; assert(x.Store.save(candidate(x)), 'candidate save completes while capturing the post-verification interruption image');
+    const image = x.flags.capturedData, payload = JSON.parse(image[J]).payload, journal = JSON.parse(payload), digest = require('crypto').createHash('sha256').update(image[K]).digest('hex');
+    assert(x.flags.injectedFailures.some(f => f.phase === 'readback' && f.key === K) && journal.previous === prior && journal.candidateDigest === digest && image[C] === undefined, 'interruption after candidate verification has prior snapshot, matching digest, and no commit');
+    const restarted = isolatedStore(image), recovered = restarted.Store.load(); assert(recovered && recovered.profile.name === 'Prior Verified' && restarted.data[K] === prior, 'restart before commit rolls back candidate to exact prior bytes'); }
+  { const x = isolatedStore(), initial = x.Store.load(); x.flags.captureAfterSetKey = M; assert(x.Store.save(initial), 'initialization commits while capturing marker-write interruption boundary'); const image = x.flags.capturedData; assert(image[K] && image[M] === 'initialized' && image[J] && !image[C], 'marker interruption image has uncommitted candidate, marker, and prior-absent snapshot'); const r = isolatedStore(image), state = r.Store.load(); assert(state && !r.data[K] && !r.data[M] && !r.data[J], 'restart after first-install marker write removes uncommitted initial state and re-enters genuine first install'); }
+  { const x = prepared(); x.flags.captureAfterSetKey = C; assert(x.Store.save(candidate(x)), 'candidate save completes while capturing immediately after commit write');
+    const image = x.flags.capturedData, restarted = isolatedStore(image), committed = restarted.Store.load(); assert(x.flags.injectedFailures.some(f => f.phase === 'write' && f.key === C), 'commit-write interruption image was captured at the named commit phase'); assert(committed && committed.profile.name === 'Uncommitted Candidate', 'startup validates and accepts a matching durable commit written before termination'); }
+  { const x = prepared(); x.flags.captureAfterReadbackKey = C; assert(x.Store.save(candidate(x)), 'candidate save completes while capturing after commit read-back');
+    const image = x.flags.capturedData, restarted = isolatedStore(image), committed = restarted.Store.load(); assert(x.flags.injectedFailures.some(f => f.phase === 'readback' && f.key === C), 'post-commit-readback image was captured at the named verification phase'); assert(committed && committed.profile.name === 'Uncommitted Candidate', 'restart after commit verification preserves the committed candidate'); }
+  { const x = prepared(), prior = x.data[K]; x.flags.captureAfterRemoveKey = C; assert(x.Store.save(candidate(x)), 'candidate save completes while capturing commit retirement boundary');
+    const image = x.flags.capturedData, restarted = isolatedStore(image), recovered = restarted.Store.load(); assert(x.flags.injectedFailures.some(f => f.phase === 'remove' && f.key === C), 'commit retirement boundary was captured'); assert(recovered && recovered.profile.name === 'Prior Verified' && restarted.data[K] === prior, 'termination after commit marker removal but before snapshot removal conservatively restores prior bytes'); }
+  { const x = prepared(); x.flags.captureAfterRemoveKey = J; assert(x.Store.save(candidate(x)), 'candidate save completes while capturing recovery-copy retirement boundary');
+    const image = x.flags.capturedData, restarted = isolatedStore(image), committed = restarted.Store.load(); assert(x.flags.injectedFailures.some(f => f.phase === 'remove' && f.key === J), 'snapshot retirement boundary was captured after commit retirement'); assert(committed && committed.profile.name === 'Uncommitted Candidate' && !restarted.data[J] && !restarted.data[C], 'termination after verified snapshot retirement leaves validated committed current state'); }
+
+  // Corruption and unexpected authority states preserve every available raw byte and enter recovery.
+  { const x = prepared(); x.flags.failNextSetKey = C; x.Store.save(candidate(x)); x.data[J] = '{corrupt journal'; const current = x.data[K], rawJournal = x.data[J]; const r = isolatedStore(x.data); assert(r.Store.load() === null && r.Store.isRecoveryRequired() && r.data[K] === current && r.data[J] === rawJournal, 'corrupt snapshot preserves current and journal bytes in recovery'); assert(JSON.parse(r.Store.exportRecovery()).records.some(v => v.key === J && v.raw === rawJournal), 'corrupt journal bytes are included in recovery export'); }
+  { const x = prepared(), current = x.data[K], orphan = JSON.stringify({ v: 1, current: 'a'.repeat(64) }); x.data[C] = orphan; const r = isolatedStore(x.data); assert(r.Store.load() === null && r.Store.isRecoveryRequired() && r.data[K] === current && r.data[C] === orphan, 'orphan commit without snapshot enters recovery and preserves current and commit bytes'); }
+  { const x = prepared(), prior = x.data[K]; x.flags.failNextSetKey = C; x.Store.save(candidate(x)); x.data[C] = '{corrupt commit'; expectPriorAfterRestart(x, 'corrupt commit record', prior); }
+  { const x = prepared(); x.flags.failNextSetKey = C; x.Store.save(candidate(x)); x.data[K] = '{corrupt candidate'; const current = x.data[K], snap = x.data[J]; const r = isolatedStore(x.data); assert(r.Store.load() === null && r.Store.isRecoveryRequired() && r.data[K] === current && r.data[J] === snap, 'corrupt candidate matching neither journal image enters recovery without overwrite'); }
+  { const x = prepared(); x.flags.failNextSetKey = C; x.Store.save(candidate(x)); x.data[K] = JSON.stringify({ ...JSON.parse(x.data[K]), profile: { ...JSON.parse(x.data[K]).profile, name: 'Unexpected Third State' } }); const current = x.data[K], snap = x.data[J]; const r = isolatedStore(x.data); assert(r.Store.load() === null && r.Store.isRecoveryRequired() && r.data[K] === current && r.data[J] === snap, 'state matching neither snapshot nor candidate remains untouched in recovery'); }
+  { const x = prepared(), prior = x.data[K]; x.flags.failNextSetKey = C; x.Store.save(candidate(x)); expectPriorAfterRestart(x, 'repeated startup recovery', prior); const again = isolatedStore(x.data); assert(again.Store.load().profile.name === 'Prior Verified', 'second fresh startup remains stable after recovery'); }
+
+  // Ordinary writes, migration, explicit restore and reset all retire their journal after verification.
+  { const x = prepared(), s = candidate(x); assert(x.Store.save(s) && !x.data[J] && !x.data[C], 'ordinary committed write leaves no live journal'); }
+  { const legacy = Store.defaults(); delete legacy.v; legacy.profile.name = 'Journal Migration'; const raw = JSON.stringify(legacy), x = isolatedStore({ 'hunterarsenal.v2': raw }); const result = x.Store.load(); assert(result && result.profile.name === 'Journal Migration' && !x.data[J] && !x.data[C] && !x.data['hunterarsenal.v2'], 'legacy migration verifies destination before source removal and journal retirement'); }
+  { const x = prepared(), backup = x.Store.defaults(); backup.profile.name = 'Journal Restore'; assert(x.Store.restore(backup).ok && !x.data[J] && !x.data[C], 'explicit restore commits before retiring journal'); const reset = x.Store.reset(); assert(reset.ok && !x.data[J] && !x.data[C], 'explicit reset commits before retiring journal'); }
+  { const x = prepared(), prior = x.data[K], backup = vm.runInContext(`JSON.parse(${JSON.stringify(JSON.stringify(x.Store.defaults()))})`, x.c); backup.profile.name = 'Failed Journal Restore'; x.flags.failNextSetKey = C; assert(!x.Store.restore(backup).ok && x.data[K] === prior && x.data[J] && !x.data[C], 'failed explicit restore retains prior state and recovery snapshot'); expectPriorAfterRestart(x, 'failed explicit restore', prior); }
+  { const x = prepared(), prior = x.data[K]; x.flags.failNextSetKey = C; assert(!x.Store.reset().ok && x.data[K] === prior && x.data[J] && !x.data[C], 'failed explicit reset retains prior progress and journal'); expectPriorAfterRestart(x, 'failed explicit reset', prior); }
+  { const legacy = Store.defaults(); delete legacy.v; legacy.profile.name = 'Interrupted Legacy'; const raw = JSON.stringify(legacy), x = isolatedStore({ 'hunterarsenal.v2': raw }); x.flags.captureAfterReadbackKey = K; const loaded = x.Store.load(); assert(loaded && x.flags.capturedData[K] && x.flags.capturedData[J] && x.flags.capturedData['hunterarsenal.v2'] === raw, 'migration destination verification boundary retains the legacy source'); const restarted = isolatedStore(x.flags.capturedData), migrated = restarted.Store.load(); assert(migrated && migrated.profile.name === 'Interrupted Legacy' && JSON.parse(restarted.data[K]).profile.name === 'Interrupted Legacy', 'restart after interrupted migration safely retries from the preserved legacy source'); }
+  { const legacy = Store.defaults(); delete legacy.v; legacy.profile.name = 'Migration Test'; const raw = JSON.stringify(legacy), x = isolatedStore({ 'hunterarsenal.v2': raw }); x.flags.failReadbackAfterSetKey = K; assert(x.Store.load() === null && x.Store.isRecoveryRequired() && x.data['hunterarsenal.v2'] === raw, 'migration destination read-back failure preserves legacy source'); const r = isolatedStore(x.data), migrated = r.Store.load(); assert(migrated && migrated.profile.name === 'Migration Test' && r.data['hunterarsenal.v2'] === undefined, 'fresh startup recovers and retries validated legacy migration'); }
 }
 {
   const shared = {}, tabA = isolatedStore({}, shared), tabB = isolatedStore({}, shared);
@@ -273,6 +458,17 @@ const mig = Store.load(); assert(mig.habits[0].id === 'old' && G.totalXP(mig) ==
 {
   const x = isolatedStore(), initial = x.Store.load(); x.Store.save(initial);
   const before = x.data['hunterarsenal.v3'];
+  const backupText = x.Store.exportJSON(initial), exported = JSON.parse(backupText);
+  assert(exported.format === 'backup' && exported.formatVersion === 1 && exported.data.v === 4, 'backup export includes explicit envelope and schema version metadata');
+  assert(x.Store.importJSON(backupText).v === 4 && x.data['hunterarsenal.v3'] === before, 'new versioned backup round-trips without changing current saved data');
+  assert(x.Store.importJSON(JSON.stringify({ app: 'HunterArsenal', version: '2.5.0', exportedAt: 'legacy', data: initial })).v === 4, 'legacy backup without explicit format metadata remains import-compatible');
+  let unsupportedEnvelopeRejected = false, malformedEnvelopeRejected = false;
+  try { x.Store.importJSON(JSON.stringify({ ...exported, formatVersion: 999 })); } catch (e) { unsupportedEnvelopeRejected = true; }
+  try { x.Store.importJSON(JSON.stringify({ ...exported, formatVersion: undefined })); } catch (e) { malformedEnvelopeRejected = true; }
+  assert(unsupportedEnvelopeRejected && malformedEnvelopeRejected && x.data['hunterarsenal.v3'] === before, 'unsupported and malformed explicit backup metadata is rejected without changing current progress');
+  let invalidExportRejected = false;
+  try { x.Store.exportJSON({ v: 4, habits: [] }); } catch (e) { invalidExportRejected = true; }
+  assert(invalidExportRejected && x.data['hunterarsenal.v3'] === before, 'invalid backup export is rejected without changing saved data');
   let invalidRejected = false;
   try { x.Store.importJSON(JSON.stringify({ app: 'HunterArsenal', data: { v: 4, habits: {} } })); } catch (e) { invalidRejected = true; }
   assert(invalidRejected && x.data['hunterarsenal.v3'] === before, 'invalid imported backup cannot replace current valid data');
@@ -367,7 +563,41 @@ assert(G.ACHIEVEMENTS.length === 25, '25 achievements'); assert(G.TITLES.length 
  assert(app.includes('Settings · ${esc(settingsSub)}')&&app.includes('"Hunter\'s Rules"'),'Hunter\'s Rules remains accessible from Settings');
  assert(sw.includes("'./manifest.json'")&&sw.includes("'./icons/icon-512.png'"),'service worker precaches relative manifest and app icon');
  assert(sw.includes('event.respondWith(staleWhileRevalidate(req, event))')&&sw.includes('event.waitUntil(network.then(() => undefined))'),'service worker keeps stale-while-revalidate work alive until cache refresh completes');
+ assert(sw.includes("keys.filter((k) => k.startsWith('hunter-arsenal-') && k !== CACHE)")&&!sw.includes('localStorage')&&!sw.includes('indexedDB'),'service-worker cleanup remains limited to versioned app caches, separate from progress storage');
+ assert(app.includes('The browser granted persistent storage.')&&app.includes('The browser did not grant persistent storage.')&&app.includes('does not affect offline use'),'storage persistence status explains the browser result without blocking offline use');
  assert(app.includes("const first = dialog.querySelector(")&&app.includes("if (e.key === 'Tab' && dialog)")&&app.includes('sheetReturnFocus'),'sheets set initial focus, trap keyboard focus, and restore focus to the opener');}
+// ---- Release history reuses What's New and keeps announcement acknowledgement separate
+{
+  const app = fs.readFileSync(path.join(__dirname, 'js', 'app.js'), 'utf8');
+  const sw = fs.readFileSync(path.join(__dirname, 'sw.js'), 'utf8');
+  const whatsNewSource = app.match(/function whatsNew\(showHistory = false\) \{[\s\S]*?\n\}/)[0];
+  const historyCtx = { CHANGELOG: [...ctx.CHANGELOG].reverse(), APP_VERSION: ctx.APP_VERSION, notices: [], saves: 0, state: { meta: { lastAcknowledgedWhatsNewVersion: null } } };
+  vm.createContext(historyCtx);
+  vm.runInContext(`const window={APP_VERSION:APP_VERSION,CHANGELOG:CHANGELOG}, Notice={show(n){notices.push(n)}}, S=state; const esc=x=>String(x), ic=()=>'<i></i>', save=()=>{saves++}; ${whatsNewSource}; globalThis.openHistory=()=>whatsNew(true); globalThis.openAnnouncement=()=>whatsNew();`, historyCtx);
+  historyCtx.openHistory();
+  const history = historyCtx.notices[0], releaseVersions = [...history.bodyHTML.matchAll(/<span>v([^<]+)<\/span>/g)].map(m => m[1]);
+  assert(releaseVersions.join(',') === '2.6.0,2.5.0,2.4.0,2.3.0,2.2.0,2.1.0,2.0.0', 'release history orders available releases newest to oldest');
+  assert(history.bodyHTML.includes('<details class="nw-release" open>') && (history.bodyHTML.match(/<details class="nw-release"/g) || []).length === releaseVersions.length, 'release history expands the latest entry and makes previous releases expandable');
+  assert(history.primary.label === 'CLOSE' && !history.primary.onClick && historyCtx.state.meta.lastAcknowledgedWhatsNewVersion === null && historyCtx.saves === 0, 'opening and closing Settings release history does not acknowledge an unseen release');
+  assert(app.includes("item('info',\"What's New\"") && app.includes("case 'whatsnew': whatsNew(true); break;"), 'Settings → What’s New opens the existing release-history renderer');
+  historyCtx.openAnnouncement();
+  const announcement = historyCtx.notices[1];
+  assert(announcement.subtitle === 'v2.6.0' && announcement.bodyHTML.includes('OFFLINE DATA PROTECTION') && announcement.primary.label === 'CONTINUE' && announcement.escapeDismiss, 'first-launch/update announcement remains the latest release with its existing action and dismissal');
+  announcement.primary.onClick();
+  assert(historyCtx.state.meta.lastAcknowledgedWhatsNewVersion === '2.6.0' && historyCtx.saves === 1, 'announcement Continue retains the established acknowledgement and save behavior');
+  const showIfNeededSource = app.match(/function showWhatsNewIfNeeded\(\) \{[\s\S]*?\n\}/)[0];
+  const announcementGate = { APP_VERSION: '2.6.0', ack: null, opened: 0 };
+  vm.createContext(announcementGate);
+  vm.runInContext(`const window={APP_VERSION:APP_VERSION}, S={meta:{lastAcknowledgedWhatsNewVersion:ack}}; const whatsNew=()=>{opened++}; ${showIfNeededSource}; globalThis.check=showWhatsNewIfNeeded;`, announcementGate);
+  announcementGate.check();
+  announcementGate.ack = '2.6.0';
+  vm.runInContext(`S.meta.lastAcknowledgedWhatsNewVersion=ack;`, announcementGate);
+  announcementGate.check();
+  assert(announcementGate.opened === 1, 'first-launch/update gate shows unseen current release once and respects saved acknowledgement');
+  const systemWindow = fs.readFileSync(path.join(__dirname, 'js', 'systemwindow.js'), 'utf8');
+  assert(systemWindow.includes("close(active.secondary || active.escapeDismiss ? 'secondary' : 'primary')"), 'dismissing the announcement with Escape does not invoke Continue acknowledgement');
+  assert(sw.includes("'./js/version.js'") && sw.includes("'./js/app.js'") && sw.includes("'./css/styles.css'"), 'release history data, renderer, and styles remain available from the offline app shell');
+}
 // ---- Daily Mission repeat (a fixed time every day)
 { const S = Store.defaults(), at = new Date(2026, 5, 10, 7, 0, 0).getTime();            // 10 Jun 07:00 local
   assert(!G.dqSetRepeat(S, '25:99', at) && S.dailyQuest.repeat === null, 'invalid time is rejected');
@@ -386,4 +616,6 @@ assert(G.ACHIEVEMENTS.length === 25, '25 achievements'); assert(G.TITLES.length 
   const repeatState = Store.defaults(); repeatState.dailyQuest.repeat = '07:15';
   const R = Store.importJSON(JSON.stringify({ app: 'HunterArsenal', data: repeatState })); assert(R.dailyQuest.repeat === '07:15', 'repeat survives validated import/normalization'); }
 
-console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED'); process.exitCode = fails ? 1 : 0;
+Promise.all(asyncChecks).then(() => {
+  console.log(fails ? `\n${fails} FAILED` : '\nALL PASSED'); process.exitCode = fails ? 1 : 0;
+});

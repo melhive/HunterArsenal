@@ -5,7 +5,9 @@
 'use strict';
 const HA = window.HA, G = HA.Game, Store = HA.Store, Notice = HA.Notice;
 let S = Store.load();
+let lastSavedState = S ? JSON.parse(JSON.stringify(S)) : null;
 let pendingShopPurchase = null, shopPurchaseSeq = 0, shopPurchaseBusy = false;
+let resetFlowPending = false;
 
 /* ============================== icons ============================== */
 const ICONS = {
@@ -95,10 +97,14 @@ const rankPill = (id, tag) => `<${tag || 'span'} class="pill" data-rank="${id}" 
 /* ============================== UI state ============================== */
 let view = 'home', homeTab = 'today', bonusSub = null, profileSub = null, settingsSub = null, curDay = today(), sheetReturnFocus = null;
 let habitFilter = 'ALL', skillFilter = 'ALL', achFilter = 'all', achSort = 'default', titleFilter = 'all', titleCat = 'All', titleQuery = '';
-let weekOffset = 0, historyYear = new Date().getFullYear(), activeHeatDay = null, renderedHeatYear = null, popId = null, menuSkill = null, menuHabit = null, chFilter = 'all', classTab = null, deferredPrompt = null, swReg = null, appVersion = window.APP_VERSION || '', draft = null, dqTimer = null, dqNoticeQueued = false;
+let weekOffset = 0, historyYear = new Date().getFullYear(), activeHeatDay = null, renderedHeatYear = null, popId = null, menuSkill = null, menuHabit = null, chFilter = 'all', classTab = null, deferredPrompt = null, swReg = null, appVersion = window.APP_VERSION || '', draft = null, dqTimer = null, dqNoticeQueued = false, storagePersistence = 'checking';
 
 const save = () => {
-  if (Store.isRecoveryRequired() || !Store.save(S)) { render(); return false; }
+  if (Store.isRecoveryRequired() || !Store.save(S)) {
+    if (lastSavedState) S = JSON.parse(JSON.stringify(lastSavedState));
+    render(); return false;
+  }
+  lastSavedState = JSON.parse(JSON.stringify(S));
   return true;
 };
 
@@ -550,7 +556,14 @@ function settingsHTML() {
   } else if (settingsSub === 'Security') {
     body = `${sec('Device Lock',`<div class="setrow"><div><b>App Lock</b><small>${esc(HA.Security.status())}</small></div><button class="btn ghost sm" data-act="sec-manage">Manage</button></div>`)}${sec('Encrypted Backup',item('lock','Export encrypted backup','AES-256 protected by your passphrase','export'))}`;
   } else if (settingsSub === 'Data & Sync') {
-    body = `${sec('Backup',`${item('lock','Export encrypted backup','AES-256, protected by your passphrase','export')}${item('download','Export plain backup','Readable local backup file','export-plain')}${item('restore','Import / restore backup','Encrypted or plain','import')}${item('trash','Reset all data','Erases this device data','reset')}`,'flush')}${sec('Sync',`<div class="setrow"><div><b>Sync</b><small>End-to-end encrypted sync is planned</small></div><span class="chipstat">Coming soon</span></div>`)}${sec('Install App',install)}${sec('Archived Habits',`Habits stay available for restore under Account.`)}`;
+    const persistence = storagePersistence === 'granted'
+      ? 'The browser granted persistent storage. This reduces automatic eviction risk, but cannot protect against browser data being cleared or device loss.'
+      : storagePersistence === 'denied'
+        ? 'The browser did not grant persistent storage. It may evict site data under storage pressure; this request does not affect offline use.'
+        : storagePersistence === 'unavailable'
+          ? 'Persistent storage protection is unavailable in this browser. It may evict site data under storage pressure; this does not affect offline use.'
+          : 'Checking whether this browser can protect site data from automatic eviction.';
+    body = `${sec('Backup',`${item('lock','Export encrypted backup','AES-256, protected by your passphrase','export')}${item('download','Export plain backup','Readable local backup file','export-plain')}${item('restore','Import / restore backup','Encrypted or plain','import')}${item('trash','Reset all data','Erases this device data','reset')}`,'flush')}${sec('Browser Storage',`<div class="setrow"><div><b>Persistent storage</b><small>${persistence}</small></div><span class="chipstat">${esc(storagePersistence)}</span></div>`)}${sec('Sync',`<div class="setrow"><div><b>Sync</b><small>End-to-end encrypted sync is planned</small></div><span class="chipstat">Coming soon</span></div>`)}${sec('Install App',install)}${sec('Archived Habits',`Habits stay available for restore under Account.`)}`;
   } else {
     body = `${sec('HunterArsenal',`<div class="setrow"><b>Version</b><span>v${esc(appVersion)}</span></div>${item('info',"What's New",`View the v${esc(appVersion)} release notes`,'whatsnew')}${item('scroll',"Hunter's Rules",'Nine sections with live progression values','rules')}${install}${item('restore','Check for updates','Refresh the offline app cache','update')}`)}`;
   }
@@ -609,6 +622,8 @@ function renderStorageRecovery() {
   const info = Store.recoveryInfo() || { reason: 'unknown', records: [] };
   const available = info.records.filter(x => x.available).length;
   const reason = info.reason === 'read-failure' ? 'The browser could not read the saved record.' :
+    info.reason === 'missing-saved-record' ? 'HunterArsenal was initialized before, but its saved progress is missing. No default state has been written.' :
+    info.reason === 'marker-write-failure' ? 'The saved state was verified, but initialization protection could not be verified. Normal saving is paused.' :
     info.reason === 'write-failure' ? 'A safe save could not be verified.' :
     info.reason === 'rollback-failure' ? 'A save could not be verified or safely rolled back. Export recovery data before closing this page.' :
     info.reason === 'concurrent-write' ? 'Another HunterArsenal tab changed saved data. This tab has paused to protect both versions.' :
@@ -636,7 +651,7 @@ function restoreCandidate(candidate) {
   G.dqTick(candidate, Date.now()); G.refreshDay(candidate, today()); G.checkUnlocks(candidate, today());
   const result = Store.restore(candidate);
   if (!result.ok) { render(); return; }
-  S = result.state; ob = null; view = 'home'; homeTab = 'today'; bonusSub = null; profileSub = null; settingsSub = null;
+  S = result.state; lastSavedState = JSON.parse(JSON.stringify(result.state)); ob = null; view = 'home'; homeTab = 'today'; bonusSub = null; profileSub = null; settingsSub = null;
   applyTheme(); render(); toast('Backup restored'); reportEvents(boot.events);
 }
 function importRecoveryBackup() { importData(); }
@@ -1061,15 +1076,25 @@ function finishOnboarding() {
     bodyHTML: `<ul class="nw-list"><li>${ic('check')}Hunter identified <span style="margin-left:auto;font-family:var(--font-mono);color:var(--tone)">${esc(S.profile.hunterId)}</span></li><li>${ic('check')}System linked <span style="margin-left:auto;color:#8c97a4">on this device</span></li><li>${ic('check')}Starter habits added <span style="margin-left:auto;color:#8c97a4">${added}</span></li><li>${ic('check')}Ready for assignment</li></ul>`, quote: 'Discipline is the system.' });
   setTimeout(showWhatsNewIfNeeded, 600);
 }
-function whatsNew() {
-  const version = String(window.APP_VERSION || ''), entry = (window.CHANGELOG || []).find(item => item.version === version);
+function whatsNew(showHistory = false) {
+  const releases = [...(window.CHANGELOG || [])].sort((a, b) => {
+    const av = String(a.version).split('.').map(Number), bv = String(b.version).split('.').map(Number);
+    for (let i = 0; i < Math.max(av.length, bv.length); i++) { const diff = (bv[i] || 0) - (av[i] || 0); if (diff) return diff; }
+    return 0;
+  });
+  const version = String(window.APP_VERSION || ''), entry = releases.find(item => item.version === version);
   if (!entry) return;
-  const sections = entry.sections || [{ title: 'WHAT’S NEW', notes: entry.notes || [] }];
-  const sectionHTML = sections.map(section => `<div><b>${esc(section.title)}</b><ul class="nw-list">${section.notes.map(note => `<li>${ic('check')}${esc(note)}</li>`).join('')}</ul></div>`).join('');
-  Notice.show({ eyebrow: 'SYSTEM UPDATE', title: 'HUNTERARSENAL', subtitle: `v${esc(version)}`, escapeDismiss: true,
-    bodyHTML: `<p><b>HUMAN METAMORPHOSIS PROGRAM</b></p><p><b>WHAT’S NEW</b></p>${sectionHTML}`,
-    quote: 'All systems operational.',
-    primary: { label: 'CONTINUE', onClick: () => { S.meta.lastAcknowledgedWhatsNewVersion = version; save(); } }
+  const releaseContent = release => {
+    const sections = release.sections || [{ title: 'WHAT’S NEW', notes: release.notes || [] }];
+    return sections.map(section => `<div class="nw-release-section"><b>${esc(section.title)}</b><ul class="nw-list">${section.notes.map(note => `<li>${ic('check')}${esc(note)}</li>`).join('')}</ul></div>`).join('');
+  };
+  const bodyHTML = showHistory
+    ? `<p><b>HUMAN METAMORPHOSIS PROGRAM</b></p><div class="nw-release-history" aria-label="Release history">${releases.map((release, index) => `<details class="nw-release"${index === 0 ? ' open' : ''}><summary><span>v${esc(release.version)}</span><time>${esc(release.date || '')}</time></summary><div class="nw-release-notes">${releaseContent(release)}</div></details>`).join('')}</div>`
+    : `<p><b>HUMAN METAMORPHOSIS PROGRAM</b></p><p><b>WHAT’S NEW</b></p>${releaseContent(entry)}`;
+  Notice.show({ eyebrow: showHistory ? 'RELEASE ARCHIVE' : 'SYSTEM UPDATE', title: 'HUNTERARSENAL', subtitle: showHistory ? 'RELEASE HISTORY' : `v${esc(version)}`, escapeDismiss: !showHistory,
+    bodyHTML,
+    quote: showHistory ? '' : 'All systems operational.',
+    primary: showHistory ? { label: 'CLOSE' } : { label: 'CONTINUE', onClick: () => { S.meta.lastAcknowledgedWhatsNewVersion = version; save(); } }
   });
 }
 function showWhatsNewIfNeeded() {
@@ -1135,9 +1160,15 @@ function importData() {
   };
   inp.click();
 }
-function resetAll() {
+async function resetAll() {
+  if (resetFlowPending) return;
+  resetFlowPending = true;
+  let confirmed = false;
+  try { confirmed = await HA.Security.confirmDataReset(); }
+  catch (e) { resetFlowPending = false; throw e; }
+  if (!confirmed) { resetFlowPending = false; return; }
   Notice.show({ title: 'RESET ALL DATA?', allowDuringRecovery: true, tone: '#b5575f', sound: 'penalty', dismissible: true, bodyHTML: '<p style="margin:0;font-size:.85rem;color:#d5dbe2">This permanently resets all HunterArsenal progress and settings on this device, including Habits, Skills, XP, records, Hunter Credits, and profile data. Export recovery data or a backup first if you might want it back.</p>',
-    secondary: { label: 'CANCEL' }, primary: { label: 'RESET', onClick: () => { const result = Store.reset(); if (!result.ok) { render(); return; } S = result.state; ob = null; view = 'home'; homeTab = 'today'; bonusSub = null; profileSub = null; applyTheme(); render(); openOnboarding(); } } });
+    secondary: { label: 'CANCEL', onClick: () => { resetFlowPending = false; } }, primary: { label: 'RESET', onClick: () => { if (!resetFlowPending) return; const result = Store.reset(); resetFlowPending = false; if (!result.ok) { render(); return; } S = result.state; lastSavedState = JSON.parse(JSON.stringify(result.state)); ob = null; view = 'home'; homeTab = 'today'; bonusSub = null; profileSub = null; applyTheme(); render(); openOnboarding(); } } });
 }
 
 /* ============================== events ============================== */
@@ -1258,7 +1289,7 @@ document.addEventListener('click', (e) => {
     case 'restore': if (G.activeHabits(S).length >= G.CONST.MAX_ACTIVE_HABITS) { limitNotice(); break; } mutate(() => { const h = S.habits.find(x => x.id === d.id); if (h) h.archived = false; }); toast('Habit restored with its mastery'); break;
     case 'install': if (deferredPrompt) { deferredPrompt.prompt(); deferredPrompt.userChoice.then(choice => { if (choice && choice.outcome === 'accepted') toast('Installation started'); deferredPrompt = null; render(); }).catch(() => { deferredPrompt = null; render(); }); } break;
     case 'update': checkUpdate(); break;
-    case 'whatsnew': whatsNew(); break;
+    case 'whatsnew': whatsNew(true); break;
     case 'export': exportEncrypted(); break;
     case 'export-plain': exportData(); break;
     case 'sec-manage': HA.Security.manage(() => render()); break;
@@ -1378,7 +1409,10 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then((reg) => { swReg = reg; reg.update().catch(() => {}); }).catch((err) => console.warn('Service worker failed', err));
   });
 }
-if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+Store.requestPersistentStorage(navigator.storage).then(status => {
+  storagePersistence = status;
+  if (view === 'settings' && settingsSub === 'Data & Sync') render();
+});
 
 /* ============================== boot ============================== */
 if (Store.isRecoveryRequired() || !S) {

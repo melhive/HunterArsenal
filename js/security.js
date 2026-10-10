@@ -19,6 +19,13 @@
 
   /* ---------------------------------------------------------------- byte helpers */
   const rnd = n => g.crypto.getRandomValues(new Uint8Array(n));
+  function makeResetCode() {
+    if (!g.crypto || !g.crypto.getRandomValues) throw new Error('Secure random generation is unavailable.');
+    const limit = Math.floor(0x100000000 / 90000) * 90000, word = new Uint32Array(1);
+    do { g.crypto.getRandomValues(word); } while (word[0] >= limit);
+    return String(10000 + (word[0] % 90000));
+  }
+  const resetCodeMatches = (expected, entered) => typeof expected === 'string' && /^\d{5}$/.test(expected) && entered === expected;
   const b64 = u8 => { let s = ''; for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000)); return btoa(s); };
   const ub64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
   const same = (a, b) => { if (a.length !== b.length) return false; let d = 0; for (let i = 0; i < a.length; i++) d |= a[i] ^ b[i]; return d === 0; };
@@ -101,7 +108,7 @@
   }
 
   /* ---------------------------------------------------------------- lock screen */
-  let overlay = null, entry = '', busy = false, locked = false, hiddenAt = 0, tick = null;
+  let overlay = null, entry = '', busy = false, locked = false, hiddenAt = 0, tick = null, forgotPending = false;
   const guarded = ['app', 'layer', 'notice'];
   function setInert(on) { guarded.forEach(id => { const e = document.getElementById(id); if (!e) return; if (on) { e.setAttribute('inert', ''); e.setAttribute('aria-hidden', 'true'); } else { e.removeAttribute('inert'); e.removeAttribute('aria-hidden'); } }); }
   function closeOverlay() { clearInterval(tick); tick = null; if (overlay) { overlay.remove(); overlay = null; } entry = ''; locked = false; setInert(false); document.documentElement.classList.remove('is-locked'); }
@@ -276,14 +283,29 @@
     }
   }
   async function forgot() {
-    const v = await ask({ title: 'FORGOT PASSCODE', ok: 'Erase everything', danger: true,
-      body: 'The passcode cannot be recovered. The only way back in is to erase all data on this device and start over. If you have a backup you can restore it afterwards.<br><br>Type <b>ERASE</b> to confirm.',
-      fields: [{ id: 'w', label: 'Confirmation', type: 'text' }], validate: x => (x.w.trim().toUpperCase() === 'ERASE' ? '' : 'Type ERASE to confirm.') });
-    if (!v) return;
-    const reset = HA.Store && HA.Store.reset ? HA.Store.reset() : null;
-    if (!reset || !reset.ok) { await notify('DATA RESET FAILED', 'Your saved data was not erased. Close this message and use the recovery options to export or restore your progress.'); return; }
-    if (!putCfg(null)) { await notify('APP LOCK REMAINS ACTIVE', 'Your data was reset, but the local App Lock setting could not be cleared. Restart and use your passcode to continue.'); return; }
-    g.location.reload();
+    if (forgotPending) return;
+    forgotPending = true;
+    try {
+      const v = await ask({ title: 'FORGOT PASSCODE', ok: 'Erase everything', danger: true,
+        body: 'The passcode cannot be recovered. The only way back in is to erase all data on this device and start over. If you have a backup you can restore it afterwards.<br><br>Type <b>ERASE</b> to confirm.',
+        fields: [{ id: 'w', label: 'Confirmation', type: 'text' }], validate: x => (x.w.trim().toUpperCase() === 'ERASE' ? '' : 'Type ERASE to confirm.') });
+      if (!v) return;
+      if (!(await confirmDataReset())) return;
+      const reset = HA.Store && HA.Store.reset ? HA.Store.reset() : null;
+      if (!reset || !reset.ok) { await notify('DATA RESET FAILED', 'Your saved data was not erased. Close this message and use the recovery options to export or restore your progress.'); return; }
+      if (!putCfg(null)) { await notify('APP LOCK REMAINS ACTIVE', 'Your data was reset, but the local App Lock setting could not be cleared. Restart and use your passcode to continue.'); return; }
+      g.location.reload();
+    } finally { forgotPending = false; }
+  }
+  async function confirmDataReset() {
+    let code;
+    try { code = makeResetCode(); }
+    catch (e) { await notify('RESET UNAVAILABLE', 'A secure confirmation code could not be generated. No data was reset.'); return false; }
+    const result = await ask({ title: 'CONFIRM DATA RESET', danger: true,
+      body: `To continue, enter this one-time code exactly: <b>${code}</b><br><br>This code is not saved. Cancel or close this prompt to keep your data.`,
+      fields: [{ id: 'code', label: 'Five-digit confirmation code', type: 'text', inputmode: 'numeric', maxlength: 5, autocomplete: 'off' }],
+      validate: x => (resetCodeMatches(code, x.code) ? '' : 'Enter the displayed five-digit code exactly.') });
+    return !!result && resetCodeMatches(code, result.code);
   }
 
   /* ---------------------------------------------------------------- auto-lock on background */
@@ -294,7 +316,7 @@
   });
   g.addEventListener('pageshow', (e) => { if (e.persisted && cfg() && !locked) showLock(true); });
 
-  HA.Security = { enabled, manage, lock: () => showLock(true), isEncrypted, encryptBackup, decryptBackup, askPassphrase, bioSupported, status: () => { const c = cfg(); return c ? (c.bio ? 'On · passcode + biometrics' : 'On · passcode') : 'Off'; }, _test: { checkPin, makePin, putCfg, cfg } };
+  HA.Security = { enabled, manage, lock: () => showLock(true), isEncrypted, encryptBackup, decryptBackup, askPassphrase, confirmDataReset, bioSupported, status: () => { const c = cfg(); return c ? (c.bio ? 'On · passcode + biometrics' : 'On · passcode') : 'Off'; }, _test: { checkPin, makePin, putCfg, cfg, makeResetCode, resetCodeMatches } };
 
   // lock before anything renders
   if (cfg()) { const boot = () => showLock(true); if (document.body) boot(); else document.addEventListener('DOMContentLoaded', boot); }
