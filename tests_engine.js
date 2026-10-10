@@ -1,16 +1,177 @@
 /* Run with: node tests_engine.js   (no dependencies) */
 const fs = require('fs'), vm = require('vm'), path = require('path'), { TextEncoder, TextDecoder } = require('util');
 const store = {};
-const ctx = { console, crypto: require('crypto').webcrypto, TextEncoder, TextDecoder, localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; }, removeItem: k => { delete store[k]; } } };
+const ctx = { console, crypto: require('crypto').webcrypto, TextEncoder, TextDecoder, btoa: s => Buffer.from(s, 'binary').toString('base64'), atob: s => Buffer.from(s, 'base64').toString('binary'), localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; }, removeItem: k => { delete store[k]; } } };
 ctx.self = ctx; ctx.window = ctx; vm.createContext(ctx);
 for (const f of ['version', 'gamification', 'storage']) vm.runInContext(fs.readFileSync(path.join(__dirname, 'js', f + '.js'), 'utf8'), ctx, { filename: f });
+vm.runInContext(fs.readFileSync(path.join(__dirname, 'js', 'cloud-crypto.js'), 'utf8'), ctx, { filename: 'cloud-crypto' });
 const { Game: G, Store } = ctx.HA;
+const mk = (id, attr, created) => ({ id, name: id, desc: '', icon: 'target', attr, days: null, created: created || '2026-01-01', archived: false });
 const securityCtx = { console, crypto: require('crypto').webcrypto, TextEncoder, TextDecoder, document: { addEventListener() {} }, localStorage: { getItem: () => null, setItem() {}, removeItem() {} }, addEventListener() {} };
 securityCtx.self = securityCtx; securityCtx.window = securityCtx; vm.createContext(securityCtx);
 vm.runInContext(fs.readFileSync(path.join(__dirname, 'js', 'security.js'), 'utf8'), securityCtx, { filename: 'security' });
 let fails = 0; const assert = (c, m) => { if (!c) { fails++; console.error('FAIL', m); } else console.log('ok  ', m); };
 const asyncChecks = [];
-const mk = (id, attr, created) => ({ id, name: id, desc: '', icon: 'target', attr, days: null, created: created || '2026-01-01', archived: false });
+asyncChecks.push((async () => {
+  const authFile = fs.readFileSync(path.join(__dirname, 'js', 'supabase-auth.js'), 'utf8');
+  let session = null, authListener = null, clientOptions = null, signInPayload = null, rpcCall = null;
+  const fakeClient = { auth: {
+    onAuthStateChange(listener) { authListener = listener; },
+    async getSession() { return { data: { session }, error: null }; },
+    async signInWithPassword(payload) { signInPayload = payload; session = { user: { email: payload.email } }; authListener('SIGNED_IN', session); return { data: { user: session.user }, error: null }; },
+    async signOut(options) { assert(options.scope === 'local', 'Auth uses local-only sign-out scope'); session = null; authListener('SIGNED_OUT', null); return { error: new Error('synthetic offline revoke') }; }
+  },
+    from(table) { assert(table === 'hunterarsenal_standard_snapshots', 'Auth snapshot reader targets only the standard-sync table'); return { select(columns) { assert(columns === 'revision,snapshot,updated_at', 'Auth snapshot reader requests only revision and snapshot metadata'); return { async maybeSingle() { return { data: null, error: null }; } }; } }; },
+    async rpc(name, args) { rpcCall = { name, args }; return { data: true, error: null }; }
+  };
+  const authContext = { HA: { SupabaseConfig: { url: 'https://test-project.supabase.co', publishableKey: 'sb_publishable_synthetic' } }, URL,
+    fakeClient, createClient(url, key, options) { clientOptions = { url, key, options }; return fakeClient; } };
+  vm.createContext(authContext);
+  const injectableSource = authFile.replace('await import(SDK_URL)', 'await Promise.resolve({ createClient })');
+  vm.runInContext(injectableSource, authContext, { filename: 'supabase-auth-test' });
+  const auth = authContext.HA.CloudAuth;
+  await auth.checkSession();
+  assert(auth.state().status === 'signed-out', 'Auth session check reports a fresh signed-out state');
+  await auth.signIn('synthetic@example.invalid', 'synthetic-password');
+  assert(auth.state().status === 'signed-in' && signInPayload.email === 'synthetic@example.invalid', 'email/password Auth accepts the test account and updates session status');
+  assert(clientOptions.options.auth.persistSession && clientOptions.options.auth.autoRefreshToken && clientOptions.options.auth.storageKey === 'hunterarsenal.supabase.auth.v1', 'Auth client enables isolated persistent session restoration');
+  await auth.checkSession();
+  assert(auth.state().status === 'signed-in', 'Auth session check restores a persisted signed-in state');
+  assert(await auth.readStandardSnapshot() === null, 'authenticated standard snapshot read returns the empty-cloud result');
+  let directWriteBlocked = false; try { await auth.writeStandardSnapshot(0, { app: 'HunterArsenal', format: 'synthetic' }); } catch (_) { directWriteBlocked = true; }
+  assert(directWriteBlocked && rpcCall === null, 'low-level snapshot writes are blocked without explicit caller confirmation');
+  assert(await auth.writeStandardSnapshot(0, { app: 'HunterArsenal', format: 'synthetic' }, 'UPLOAD INITIAL CLOUD SNAPSHOT') === true && rpcCall.name === 'write_hunterarsenal_standard_snapshot' && rpcCall.args.p_expected_revision === 0 && !Object.hasOwn(rpcCall.args, 'user_id'), 'confirmed standard snapshot writes call the auth-bound CAS RPC without accepting a user id');
+  await auth.signOut();
+  assert(auth.state().status === 'signed-out' && session === null, 'offline sign-out reports local logout after server revocation fails');
+})());
+asyncChecks.push((async () => {
+  const syncFile = fs.readFileSync(path.join(__dirname, 'js', 'cloud-sync.js'), 'utf8');
+  let remote = null, authenticated = true, offline = false, writes = 0, raceNextWrite = false;
+  const copy = value => value === null ? null : vm.runInContext(`JSON.parse(${JSON.stringify(JSON.stringify(value))})`, ctx);
+  ctx.HA.CloudAuth = {
+    async readStandardSnapshot() {
+      if (offline) throw new Error('synthetic offline failure');
+      if (!authenticated) throw new Error('synthetic unauthenticated failure');
+      return copy(remote);
+    },
+    async writeStandardSnapshot(expectedRevision, snapshot) {
+      writes++;
+      if (offline) throw new Error('synthetic offline failure');
+      if (!authenticated) throw new Error('synthetic unauthenticated failure');
+      if (raceNextWrite) { raceNextWrite = false; remote = { revision: Number(expectedRevision) + 1, snapshot: copy(snapshot), updated_at: 'synthetic-race' }; }
+      const currentRevision = remote ? Number(remote.revision) : 0;
+      if (currentRevision !== expectedRevision) return false;
+      remote = { revision: currentRevision + 1, snapshot: copy(snapshot), updated_at: 'synthetic-time' };
+      return true;
+    }
+  };
+  vm.runInContext(syncFile, ctx, { filename: 'cloud-sync' });
+  const Sync = ctx.HA.StandardSync, fixture = Store.defaults();
+  fixture.profile.name = 'Synthetic Sync';
+  fixture.habits.push(mk('synthetic-sync-habit', 'INT', '2026-01-01'));
+  const originalFixture = JSON.stringify(fixture), serialized = JSON.stringify(fixture);
+  const snapshot = Sync.createSnapshot(serialized);
+  assert(snapshot.format === 'standard-cloud-snapshot' && snapshot.formatVersion === 1 && snapshot.schemaVersion === 4 && snapshot.state.v === 4, 'standard snapshot preserves format and app-schema versions for future export-and-encrypt migration');
+  const initialReview = await Sync.review(serialized);
+  assert(initialReview.status === 'local-only' && initialReview.cloudRevision === 0 && initialReview.confirmation === 'UPLOAD INITIAL CLOUD SNAPSHOT', 'first upload begins with an explicit local-versus-cloud comparison');
+  let confirmationRejected = false; try { await Sync.confirmUpload(initialReview.handle, ''); } catch (_) { confirmationRejected = true; }
+  assert(confirmationRejected && writes === 0, 'initial upload cannot proceed without its exact explicit confirmation');
+  const reviewedInitial = await Sync.review(serialized);
+  const uploaded = await Sync.confirmUpload(reviewedInitial.handle, reviewedInitial.confirmation);
+  assert(uploaded.status === 'uploaded' && uploaded.revision === 1 && writes === 1, 'explicitly confirmed synthetic initial upload creates revision one');
+  const downloaded = await Sync.downloadSnapshot();
+  assert(downloaded.revision === 1 && JSON.stringify(downloaded.state) === originalFixture, 'synthetic download validates and returns the full state without local restoration');
+  assert(JSON.stringify(fixture) === originalFixture, 'synthetic sync operations leave their local fixture byte-for-byte unchanged');
+  const sameReview = await Sync.review(serialized);
+  assert(sameReview.status === 'same' && sameReview.confirmation === null, 'identical copies are recognized without proposing an overwrite');
+  const changed = JSON.parse(serialized); changed.profile.name = 'Synthetic Changed';
+  const divergence = await Sync.review(JSON.stringify(changed));
+  assert(divergence.status === 'different' && divergence.confirmation.includes('AFTER EXPORTING A COPY') && divergence.cloudSnapshot.state.profile.name === 'Synthetic Sync', 'divergent copies expose the previous cloud copy and require explicit preservation/replacement confirmation');
+  remote = { revision: 2, snapshot: copy(remote.snapshot), updated_at: 'concurrent-writer' };
+  const conflictedConfirmation = await Sync.confirmUpload(divergence.handle, divergence.confirmation);
+  assert(conflictedConfirmation.status === 'conflict' && writes === 1, 'a newer cloud revision blocks upload before any overwrite');
+  const racedReview = await Sync.review(JSON.stringify(changed)); raceNextWrite = true;
+  const raced = await Sync.confirmUpload(racedReview.handle, racedReview.confirmation);
+  assert(raced.status === 'conflict' && writes === 2, 'CAS race is reported and never blindly retried');
+  const beforeAuthFailureWrites = writes, authReview = await Sync.review(serialized); authenticated = false;
+  let authReviewRejected = false, authDownloadRejected = false, authUploadRejected = false;
+  try { await Sync.review(serialized); } catch (_) { authReviewRejected = true; }
+  try { await Sync.downloadSnapshot(); } catch (_) { authDownloadRejected = true; }
+  try { await Sync.confirmUpload(authReview.handle, authReview.confirmation); } catch (_) { authUploadRejected = true; }
+  assert(authReviewRejected && authDownloadRejected && authUploadRejected && writes === beforeAuthFailureWrites, 'unauthenticated review, download, and upload fail without writes');
+  authenticated = true; remote = { revision: 3, snapshot: { ...copy(snapshot), state: { v: 4, habits: 'malformed' } }, updated_at: 'synthetic-bad-payload' };
+  let malformedRejected = false; try { await Sync.downloadSnapshot(); } catch (_) { malformedRejected = true; }
+  assert(malformedRejected && writes === beforeAuthFailureWrites, 'malformed cloud state is rejected before it can be staged for restore');
+  remote = null; const offlineReview = await Sync.review(serialized); offline = true;
+  let offlineReviewRejected = false, offlineDownloadRejected = false, offlineUploadRejected = false;
+  try { await Sync.review(serialized); } catch (_) { offlineReviewRejected = true; }
+  try { await Sync.downloadSnapshot(); } catch (_) { offlineDownloadRejected = true; }
+  try { await Sync.confirmUpload(offlineReview.handle, offlineReview.confirmation); } catch (_) { offlineUploadRejected = true; }
+  assert(offlineReviewRejected && offlineDownloadRejected && offlineUploadRejected && writes === beforeAuthFailureWrites, 'offline review, download, and upload fail closed without touching local state');
+  offline = false; remote = { revision: 1, snapshot: copy(snapshot), updated_at: 'synthetic-time' };
+  const restoreReview = await Sync.prepareRestore(serialized);
+  let restoreConfirmationRejected = false; try { await Sync.confirmRestoreCandidate(restoreReview.handle, ''); } catch (_) { restoreConfirmationRejected = true; }
+  const restoreCandidate = await Sync.confirmRestoreCandidate(restoreReview.handle, restoreReview.confirmation);
+  assert(restoreConfirmationRejected && restoreReview.comparisonStatus === 'same' && restoreCandidate.status === 'ready' && JSON.stringify(restoreCandidate.state) === originalFixture && JSON.stringify(fixture) === originalFixture, 'restore candidate compares both copies, requires explicit confirmation, and never persists over local progress');
+  const staleRestoreReview = await Sync.prepareRestore(serialized); remote = { revision: 2, snapshot: copy(snapshot), updated_at: 'newer-synthetic-revision' };
+  const staleRestore = await Sync.confirmRestoreCandidate(staleRestoreReview.handle, staleRestoreReview.confirmation);
+  assert(staleRestore.status === 'conflict' && staleRestore.currentRevision === 2 && JSON.stringify(fixture) === originalFixture, 'a cloud revision changed after restore review blocks the local restore');
+  assert(!/g\.localStorage|HA\.Store\.(?:load|restore|save)\s*\(/.test(syncFile), 'sync client never reads or writes local persistence directly');
+})());
+asyncChecks.push((async () => {
+  const Vault = ctx.HA.CloudCrypto, accountId = '11111111-2222-4333-8444-555555555555';
+  const state = Store.defaults();
+  state.profile.name = 'Synthetic Vault Fixture';
+  state.habits.push(mk('synthetic-habit', 'STR', '2026-01-01'));
+  state.completions['2026-01-02'] = { 'synthetic-habit': { xp: 10, ax: 5, mx: 5, attr: 'STR', at: 1767312000000 } };
+  state.days['2026-01-02'] = { sched: 1, done: 1, perfect: true, penalty: 0, habitPenalty: 0, dqPenalty: 0, dq: 0, frozen: false, restDay: false };
+  const serialized = JSON.stringify(state), before = JSON.stringify(state);
+  const created = await Vault.createKeyEnvelope(accountId), metadata = { accountId, revision: 1, schemaVersion: 4, keyVersion: 1 };
+  assert(/^[A-Za-z0-9_-]{43}$/.test(created.recoveryKey) && created.envelope.wrap.ciphertext.length > 0, 'vault setup creates a random recovery secret and wrapped random data key');
+  assert(created.key.extractable === false && created.key.algorithm.name === 'AES-GCM' && created.key.algorithm.length === 256, 'vault data key is non-extractable AES-256-GCM');
+  const unlocked = await Vault.unwrapKeyEnvelope(created.recoveryKey, created.envelope, accountId);
+  const snapshot = await Vault.encryptSnapshot(serialized, created.key, metadata);
+  assert(snapshot.app === 'HunterArsenal' && snapshot.formatVersion === 1 && snapshot.schemaVersion === 4 && snapshot.cipher.name === 'AES-256-GCM', 'serialized v4 state encrypts with versioned authenticated snapshot metadata');
+  const migration = fs.readFileSync(path.join(__dirname, 'supabase', 'migrations', '20261011000100_create_encrypted_vault.sql'), 'utf8');
+  assert(created.envelope.format === 'vault-key-envelope' && created.envelope.kdf.salt.length === 22 && created.envelope.wrap.nonce.length === 16 && created.envelope.wrap.ciphertext.length === 64 && snapshot.format === 'encrypted-vault-snapshot' && snapshot.cipher.nonce.length === 16 && migration.includes("key_envelope ->> 'format' = 'vault-key-envelope'") && migration.includes("snapshot ->> 'format' = 'encrypted-vault-snapshot'"), 'vault migration constraints match the emitted envelope and snapshot JSON formats');
+  assert(migration.includes('ENABLE ROW LEVEL SECURITY') && migration.includes('FORCE ROW LEVEL SECURITY') && migration.includes('user_id = (SELECT auth.uid())') && migration.includes('REVOKE ALL ON TABLE public.hunterarsenal_vault FROM PUBLIC, anon, authenticated, service_role'), 'vault migration enables forced RLS and revokes direct grants from anon and service roles');
+  assert(migration.includes('WHERE user_id = caller_id') && migration.includes('AND revision = p_expected_revision') && migration.includes('ON CONFLICT (user_id) DO NOTHING') && migration.includes('RETURN changed_rows = 1'), 'vault migration writes use atomic revision compare-and-swap for create and update');
+  assert(migration.includes("IF current_user <> 'postgres'") && migration.includes('rolsuper OR rolbypassrls') && migration.includes('ALTER FUNCTION public.write_hunterarsenal_vault(bigint, jsonb, jsonb) OWNER TO postgres') && migration.includes('caller_id := auth.uid()') && migration.includes('SET search_path = pg_catalog'), 'vault writer is owned by a privileged postgres role and uses a fixed path with auth-derived ownership');
+  assert(migration.includes('GRANT SELECT, DELETE ON TABLE public.hunterarsenal_vault TO authenticated') && migration.includes('GRANT EXECUTE ON FUNCTION public.write_hunterarsenal_vault(bigint, jsonb, jsonb) TO authenticated') && migration.includes('service_role remains a Supabase BYPASSRLS role'), 'authenticated clients have no direct write grants and migration documents service-role bypass accurately');
+  assert(migration.includes('GRANT USAGE ON SCHEMA public TO authenticated') && migration.includes('GRANT USAGE ON SCHEMA auth TO authenticated') && migration.includes('GRANT EXECUTE ON FUNCTION auth.uid() TO authenticated'), 'authenticated RLS policies and RPC have required schema and auth.uid permissions');
+  assert(await Vault.decryptSnapshot(snapshot, unlocked, metadata) === serialized, 'vault snapshot decrypts byte-for-byte and preserves the validated synthetic state');
+  const second = await Vault.encryptSnapshot(serialized, created.key, metadata);
+  assert(snapshot.cipher.nonce !== second.cipher.nonce, 'each snapshot encryption generates a fresh random nonce');
+
+  const reject = async operation => { try { await operation; return false; } catch (e) { return true; } };
+  const wrongRaw = ctx.crypto.getRandomValues(new Uint8Array(32));
+  const wrongKey = await ctx.crypto.subtle.importKey('raw', wrongRaw, 'AES-GCM', false, ['decrypt']); wrongRaw.fill(0);
+  assert(await reject(Vault.decryptSnapshot(snapshot, wrongKey, metadata)), 'snapshot decryption rejects a different AES key');
+  const wrongRecovery = (created.recoveryKey[0] === 'A' ? 'B' : 'A') + created.recoveryKey.slice(1);
+  assert(await reject(Vault.unwrapKeyEnvelope(wrongRecovery, created.envelope, accountId)), 'key envelope rejects an incorrect recovery secret');
+  assert(await reject(Vault.unwrapKeyEnvelope(created.recoveryKey, created.envelope, '99999999-2222-4333-8444-555555555555')), 'key envelope rejects a mismatched account binding');
+  const tamperedEnvelope = JSON.parse(JSON.stringify(created.envelope));
+  tamperedEnvelope.wrap.ciphertext = (tamperedEnvelope.wrap.ciphertext[0] === 'A' ? 'B' : 'A') + tamperedEnvelope.wrap.ciphertext.slice(1);
+  assert(await reject(Vault.unwrapKeyEnvelope(created.recoveryKey, tamperedEnvelope, accountId)), 'modified wrapped key fails AES-GCM authentication');
+  const changedEnvelopeNonce = JSON.parse(JSON.stringify(created.envelope));
+  changedEnvelopeNonce.wrap.nonce = (changedEnvelopeNonce.wrap.nonce[0] === 'A' ? 'B' : 'A') + changedEnvelopeNonce.wrap.nonce.slice(1);
+  assert(await reject(Vault.unwrapKeyEnvelope(created.recoveryKey, changedEnvelopeNonce, accountId)), 'modified key-envelope nonce fails AES-GCM authentication');
+
+  const tamperedCiphertext = JSON.parse(JSON.stringify(snapshot));
+  tamperedCiphertext.ciphertext = (tamperedCiphertext.ciphertext[0] === 'A' ? 'B' : 'A') + tamperedCiphertext.ciphertext.slice(1);
+  const changedNonce = JSON.parse(JSON.stringify(snapshot));
+  changedNonce.cipher.nonce = (changedNonce.cipher.nonce[0] === 'A' ? 'B' : 'A') + changedNonce.cipher.nonce.slice(1);
+  const changedAad = JSON.parse(JSON.stringify(snapshot)); changedAad.accountId = '99999999-2222-4333-8444-555555555555';
+  assert(await reject(Vault.decryptSnapshot(tamperedCiphertext, unlocked)), 'modified ciphertext fails AES-GCM authentication');
+  assert(await reject(Vault.decryptSnapshot(changedNonce, unlocked)), 'nonce mismatch fails AES-GCM authentication');
+  assert(await reject(Vault.decryptSnapshot(changedAad, unlocked)), 'authenticated account metadata mismatch fails AES-GCM authentication');
+  assert(await reject(Vault.decryptSnapshot(snapshot, unlocked, { ...metadata, revision: 2 })), 'expected revision mismatch is rejected before plaintext is returned');
+  assert(await reject(Vault.decryptSnapshot({ ...snapshot, formatVersion: 999 }, unlocked)), 'unsupported snapshot format is rejected');
+  assert(await reject(Vault.encryptSnapshot('{not json', created.key, metadata)) && await reject(Vault.encryptSnapshot(JSON.stringify({ v: 4, habits: [] }), created.key, metadata)), 'invalid JSON and incomplete current-schema payloads cannot be encrypted');
+  assert(await reject(Vault.decryptSnapshot({ ...snapshot, ciphertext: 'AA' }, unlocked)), 'malformed or incomplete ciphertext payload is rejected');
+  const cryptoSource = fs.readFileSync(path.join(__dirname, 'js', 'cloud-crypto.js'), 'utf8');
+  assert(JSON.stringify(state) === before && !/localStorage|fetch\s*\(|XMLHttpRequest/.test(cryptoSource), 'vault crypto leaves the synthetic state unchanged and contains no storage or network I/O');
+})());
 function isolatedStore(initial = {}, sharedData = null) {
   const data = sharedData || { ...initial }, flags = { failGet: false, failSet: false, failRemove: false, failGetOnCall: 0, failSetOnCall: 0, replaceOnGetCall: 0, replaceValue: null, getCalls: 0, setCalls: 0,
     failNextGetKey: null, failNextSetKey: null, quotaSetKey: null, writeThenThrowKey: null, failNextRemoveKey: null, failNextSetAfterReadbackKey: null, failGetKeyOccurrence: {}, failSetKeyOccurrence: {}, getKeyCounts: {}, setKeyCounts: {}, failReadbackAfterSetKey: null, failReadbackArmed: false, readbackMismatchAfterSetKey: null, readbackMismatchArmed: false, readbackMismatchValue: null, injectedFailures: [], operations: [], captureAfterSetKey: null, captureAfterReadbackKey: null, captureAfterRemoveKey: null, captureArmed: false, capturedData: null };
@@ -564,7 +725,24 @@ assert(G.ACHIEVEMENTS.length === 25, '25 achievements'); assert(G.TITLES.length 
  assert(sw.includes("'./manifest.json'")&&sw.includes("'./icons/icon-512.png'"),'service worker precaches relative manifest and app icon');
  assert(sw.includes('event.respondWith(staleWhileRevalidate(req, event))')&&sw.includes('event.waitUntil(network.then(() => undefined))'),'service worker keeps stale-while-revalidate work alive until cache refresh completes');
  assert(sw.includes("keys.filter((k) => k.startsWith('hunter-arsenal-') && k !== CACHE)")&&!sw.includes('localStorage')&&!sw.includes('indexedDB'),'service-worker cleanup remains limited to versioned app caches, separate from progress storage');
+ const html=fs.readFileSync(path.join(__dirname,'index.html'),'utf8'),config=fs.readFileSync(path.join(__dirname,'js','supabase-config.js'),'utf8'),auth=fs.readFileSync(path.join(__dirname,'js','supabase-auth.js'),'utf8');
+ assert(html.includes("script-src 'self' https://esm.sh")&&html.includes('connect-src \'self\' https://*.supabase.co;')&&!html.includes('wss://*.supabase.co')&&html.includes('js/supabase-auth.js'),'CSP narrowly allows the pinned Auth module and HTTPS requests to default Supabase project endpoints');
+ assert(/url\s*:\s*['"][^'"]*['"]/.test(config)&&/publishableKey\s*:\s*['"][^'"]*['"]/.test(config)&&!/(serviceRole|service_role|secretKey)\s*:/i.test(config),'browser Supabase configuration uses only project URL and publishable/anon key fields');
+ assert(auth.includes('@supabase/supabase-js@2.117.3?bundle')&&auth.includes('signInWithPassword')&&auth.includes("signOut({ scope: 'local' })")&&auth.includes("storageKey: STORAGE_KEY")&&auth.includes('detectSessionInUrl: false'),'Auth adapter pins the browser SDK, supports password login, and uses isolated local-only session handling');
+ const signOutSource=(auth.match(/async function signOut\(\) \{[\s\S]*?\n  \}/)||[])[0]||'';
+ assert(signOutSource.includes("signOut({ scope: 'local' })")&&signOutSource.includes('await supabase.auth.getSession()')&&signOutSource.includes('!data.session'),'sign-out confirms local session removal even when Supabase reports a remote revoke/network error');
+ assert(auth.includes("import(SDK_URL)")&&!auth.includes('CloudCrypto')&&!auth.includes('hunterarsenal_vault')&&auth.includes(".from('hunterarsenal_standard_snapshots')")&&auth.includes("rpc('write_hunterarsenal_standard_snapshot'"),'Auth module lazy-loads the SDK and exposes only the separate standard-snapshot table/RPC');
+ assert(sw.includes("'./js/supabase-config.js'")&&sw.includes("'./js/supabase-auth.js'")&&sw.includes("'./js/cloud-sync.js'")&&html.includes('js/cloud-sync.js'),'local Supabase Auth and sync adapters remain available from the offline app shell');
+ const standardMigration=fs.readFileSync(path.join(__dirname,'supabase','migrations','20261011000200_create_standard_sync_snapshots.sql'),'utf8');
+ assert(standardMigration.includes('CREATE TABLE public.hunterarsenal_standard_snapshots')&&standardMigration.includes('REFERENCES auth.users (id) ON DELETE CASCADE')&&standardMigration.includes('ENABLE ROW LEVEL SECURITY')&&standardMigration.includes('FORCE ROW LEVEL SECURITY')&&standardMigration.includes('hunterarsenal_standard_snapshot_select_own')&&standardMigration.includes('USING (user_id = (SELECT auth.uid()))'),'standard snapshot migration creates its own forced-RLS Auth-owned table with a user-only read policy');
+ assert(standardMigration.includes('ON DELETE CASCADE')&&standardMigration.includes("format' = 'standard-cloud-snapshot'")&&standardMigration.includes("schemaVersion' = '4'")&&standardMigration.includes('Privileged database operators can read this table'),'standard snapshot schema binds Auth ownership, versions plaintext payloads, and documents operator readability');
+ assert(standardMigration.includes('ON CONFLICT (user_id) DO NOTHING')&&standardMigration.includes('AND revision = p_expected_revision')&&standardMigration.includes('RETURN changed_rows = 1')&&standardMigration.includes('ALTER FUNCTION public.write_hunterarsenal_standard_snapshot(bigint, jsonb) OWNER TO postgres'),'standard snapshot writes use postgres-owned atomic CAS and return stale-write conflicts');
+ assert(standardMigration.includes('GRANT SELECT ON TABLE public.hunterarsenal_standard_snapshots TO authenticated')&&standardMigration.includes('GRANT EXECUTE ON FUNCTION public.write_hunterarsenal_standard_snapshot(bigint, jsonb) TO authenticated')&&standardMigration.includes('REVOKE ALL ON TABLE public.hunterarsenal_standard_snapshots FROM PUBLIC, anon, authenticated, service_role')&&!/GRANT\s+[^;]*(INSERT|UPDATE|DELETE)[^;]*TO authenticated/i.test(standardMigration),'standard table grants deny anonymous/direct writes and expose only authenticated read/RPC');
+ const encryptedMigration=fs.readFileSync(path.join(__dirname,'supabase','migrations','20261011000100_create_encrypted_vault.sql'),'utf8');
+ assert(encryptedMigration.includes('CREATE TABLE public.hunterarsenal_vault')&&!standardMigration.includes('CREATE TABLE public.hunterarsenal_vault')&&!standardMigration.includes('ALTER TABLE public.hunterarsenal_vault'),'standard-sync migration leaves the encrypted-vault schema untouched');
+ assert(auth.includes("from('hunterarsenal_standard_snapshots')")&&auth.includes("rpc('write_hunterarsenal_standard_snapshot'")&&auth.includes('authenticatedClient'),'Supabase Auth adapter scopes standard snapshot reads and CAS writes to signed-in sessions');
  assert(app.includes('The browser granted persistent storage.')&&app.includes('The browser did not grant persistent storage.')&&app.includes('does not affect offline use'),'storage persistence status explains the browser result without blocking offline use');
+ assert(app.includes("sec('Supabase Account'")&&app.includes('Sign-in is optional. Offline use and local saves do not depend on Supabase.')&&app.includes('Privileged database operators may read it; this is not end-to-end encrypted.')&&app.includes('Local copy')&&app.includes('Cloud copy')&&app.includes('data-cloud-auth')&&app.includes("case 'cloud-status'")&&app.includes("case 'cloud-sign-out'")&&app.includes('Sync Now')&&app.includes("case 'cloud-sync-review'")&&app.includes("case 'cloud-sync-upload'")&&app.includes("case 'cloud-sync-restore'"),'Data & Sync compares copy summaries and offers compare-first standard sync while documenting plaintext access and offline independence');
  assert(app.includes("const first = dialog.querySelector(")&&app.includes("if (e.key === 'Tab' && dialog)")&&app.includes('sheetReturnFocus'),'sheets set initial focus, trap keyboard focus, and restore focus to the opener');}
 // ---- Release history reuses What's New and keeps announcement acknowledgement separate
 {
@@ -597,6 +775,7 @@ assert(G.ACHIEVEMENTS.length === 25, '25 achievements'); assert(G.TITLES.length 
   const systemWindow = fs.readFileSync(path.join(__dirname, 'js', 'systemwindow.js'), 'utf8');
   assert(systemWindow.includes("close(active.secondary || active.escapeDismiss ? 'secondary' : 'primary')"), 'dismissing the announcement with Escape does not invoke Continue acknowledgement');
   assert(sw.includes("'./js/version.js'") && sw.includes("'./js/app.js'") && sw.includes("'./css/styles.css'"), 'release history data, renderer, and styles remain available from the offline app shell');
+  assert(sw.includes("'./js/cloud-crypto.js'") && fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8').includes('js/cloud-crypto.js'), 'encrypted vault utility is loaded and precached for offline availability');
 }
 // ---- Daily Mission repeat (a fixed time every day)
 { const S = Store.defaults(), at = new Date(2026, 5, 10, 7, 0, 0).getTime();            // 10 Jun 07:00 local

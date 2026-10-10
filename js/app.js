@@ -8,6 +8,7 @@ let S = Store.load();
 let lastSavedState = S ? JSON.parse(JSON.stringify(S)) : null;
 let pendingShopPurchase = null, shopPurchaseSeq = 0, shopPurchaseBusy = false;
 let resetFlowPending = false;
+let cloudReview = null, cloudReviewMessage = '', cloudCloudCopyExported = false, cloudLocalCopyExported = false;
 
 /* ============================== icons ============================== */
 const ICONS = {
@@ -556,6 +557,15 @@ function settingsHTML() {
   } else if (settingsSub === 'Security') {
     body = `${sec('Device Lock',`<div class="setrow"><div><b>App Lock</b><small>${esc(HA.Security.status())}</small></div><button class="btn ghost sm" data-act="sec-manage">Manage</button></div>`)}${sec('Encrypted Backup',item('lock','Export encrypted backup','AES-256 protected by your passphrase','export'))}`;
   } else if (settingsSub === 'Data & Sync') {
+    const auth = HA.CloudAuth ? HA.CloudAuth.state() : { status: 'unavailable', email: '', message: 'Account support is unavailable in this browser.' };
+    const authStatus = auth.status === 'signed-in' ? `Signed in as ${esc(auth.email || 'your account')}`
+      : auth.status === 'connecting' ? 'Connecting to Supabase Auth…'
+        : auth.status === 'unavailable' ? 'Supabase Auth is unavailable; local use is unaffected.'
+          : 'Signed out';
+    const authControls = auth.status === 'signed-in'
+      ? `<div class="setrow"><b>${authStatus}</b><button class="btn ghost sm" data-act="cloud-sign-out" ${auth.status === 'connecting' ? 'disabled' : ''}>Sign out</button></div>`
+      : `<div class="setrow"><div><b>${authStatus}</b><small>${esc(auth.message || 'Sign in is optional. No progress is uploaded or synchronized.')}</small></div><button class="btn ghost sm" data-act="cloud-status" ${auth.status === 'connecting' ? 'disabled' : ''}>Check status</button></div>
+        <form data-cloud-auth class="cloud-auth-form" autocomplete="on"><div class="field"><label for="cloud-email">Email</label><input id="cloud-email" class="input" name="email" type="email" autocomplete="username" required></div><div class="field"><label for="cloud-password">Password</label><input id="cloud-password" class="input" name="password" type="password" autocomplete="current-password" required></div><button class="btn" type="submit" ${auth.status === 'connecting' ? 'disabled' : ''}>Sign in</button></form>`;
     const persistence = storagePersistence === 'granted'
       ? 'The browser granted persistent storage. This reduces automatic eviction risk, but cannot protect against browser data being cleared or device loss.'
       : storagePersistence === 'denied'
@@ -563,7 +573,25 @@ function settingsHTML() {
         : storagePersistence === 'unavailable'
           ? 'Persistent storage protection is unavailable in this browser. It may evict site data under storage pressure; this does not affect offline use.'
           : 'Checking whether this browser can protect site data from automatic eviction.';
-    body = `${sec('Backup',`${item('lock','Export encrypted backup','AES-256, protected by your passphrase','export')}${item('download','Export plain backup','Readable local backup file','export-plain')}${item('restore','Import / restore backup','Encrypted or plain','import')}${item('trash','Reset all data','Erases this device data','reset')}`,'flush')}${sec('Browser Storage',`<div class="setrow"><div><b>Persistent storage</b><small>${persistence}</small></div><span class="chipstat">${esc(storagePersistence)}</span></div>`)}${sec('Sync',`<div class="setrow"><div><b>Sync</b><small>End-to-end encrypted sync is planned</small></div><span class="chipstat">Coming soon</span></div>`)}${sec('Install App',install)}${sec('Archived Habits',`Habits stay available for restore under Account.`)}`;
+    let syncControls = `<p class="note">Standard sync stores readable progress in Supabase. Privileged database operators may read it; this is not end-to-end encrypted. Sync runs only when you choose an action.</p>`;
+    if (HA.StandardSync && auth.status !== 'connecting') syncControls += `<button class="btn" data-act="cloud-sync-review">Sync Now</button>`;
+    if (cloudReviewMessage) syncControls += `<p class="note" role="status">${esc(cloudReviewMessage)}</p>`;
+    if (cloudReview) {
+      const labels = { 'local-only': 'Local progress exists; no cloud snapshot exists.', same: 'Local and cloud snapshots match.', different: 'Local and cloud snapshots differ.', 'cloud-only': 'A cloud snapshot exists; no local snapshot was supplied.', empty: 'No local or cloud snapshot exists.' };
+      const summary = snapshot => {
+        if (!snapshot || !snapshot.state) return 'No snapshot';
+        const state = snapshot.state, checkins = Object.values(state.completions).reduce((count, day) => count + Object.keys(day).length, 0);
+        return `${state.habits.length} habits · ${state.skills.length} skills · ${checkins} check-ins`;
+      };
+      syncControls += `<div class="setrow"><div><b>${labels[cloudReview.status] || 'Comparison complete.'}</b><small>Cloud revision ${cloudReview.cloudRevision}${cloudReview.cloudUpdatedAt ? ` · ${esc(cloudReview.cloudUpdatedAt)}` : ''}</small></div></div>`;
+      syncControls += `<div class="setrow"><div><b>Local copy</b><small>${summary(cloudReview.localSnapshot)}</small></div></div>`;
+      if (cloudReview.cloudSnapshot) syncControls += `<div class="setrow"><div><b>Cloud copy</b><small>${summary(cloudReview.cloudSnapshot)}</small></div></div>`;
+      if (cloudReview.status === 'local-only') syncControls += `<button class="btn" data-act="cloud-sync-upload">Upload local snapshot</button>`;
+      if (cloudReview.status === 'different') syncControls += `<div class="setrow"><div><b>Preserve the existing cloud copy</b><small>Download it before replacing that revision.</small></div><button class="btn ghost sm" data-act="cloud-export-copy">Download cloud copy</button></div><button class="btn" data-act="cloud-sync-upload" ${cloudCloudCopyExported ? '' : 'disabled'}>Replace cloud snapshot</button>`;
+      if (cloudReview.cloudSnapshot && cloudReview.status !== 'same') syncControls += `<div class="setrow"><div><b>Preserve this device's copy</b><small>Download a backup before restoring over local progress.</small></div><button class="btn ghost sm" data-act="cloud-export-local">Download local backup</button></div><button class="btn" data-act="cloud-sync-restore" ${cloudLocalCopyExported ? '' : 'disabled'}>Restore cloud snapshot to this device</button>`;
+      if (cloudReview.status === 'same') syncControls += `<p class="note">No transfer is needed.</p>`;
+    }
+    body = `${sec('Backup',`${item('lock','Export encrypted backup','AES-256, protected by your passphrase','export')}${item('download','Export plain backup','Readable local backup file','export-plain')}${item('restore','Import / restore backup','Encrypted or plain','import')}${item('trash','Reset all data','Erases this device data','reset')}`,'flush')}${sec('Supabase Account',`${authControls}<p class="note">Sign-in is optional. Offline use and local saves do not depend on Supabase.</p>`)}${sec('Browser Storage',`<div class="setrow"><div><b>Persistent storage</b><small>${persistence}</small></div><span class="chipstat">${esc(storagePersistence)}</span></div>`)}${sec('Sync',syncControls)}${sec('Install App',install)}${sec('Archived Habits',`Habits stay available for restore under Account.`)}`;
   } else {
     body = `${sec('HunterArsenal',`<div class="setrow"><b>Version</b><span>v${esc(appVersion)}</span></div>${item('info',"What's New",`View the v${esc(appVersion)} release notes`,'whatsnew')}${item('scroll',"Hunter's Rules",'Nine sections with live progression values','rules')}${install}${item('restore','Check for updates','Refresh the offline app cache','update')}`)}`;
   }
@@ -591,6 +619,106 @@ function rulesHTML() {
   const badge = S.meta.rulesVersion !== '2.4.0' ? '<span class="rules-badge">RULES UPDATED · v2.4.0</span>' : '';
   return `<div class="page"><div class="pagebg"></div><button class="backbtn" data-act="rules-back">${ic('chevL')} Back</button><h1>Hunter's Rules</h1><p class="sub">Current rules and progression values ${badge}</p>${sections.map(([title,body],i)=>`<details class="rule-section" ${i===0?'open':''}><summary><span>${String(i+1).padStart(2,'0')}</span>${title}</summary><p>${body}</p></details>`).join('')}<button class="btn ghost" data-act="rules-ack">Acknowledge Updated Rules</button></div>`;
 }
+
+async function runCloudAuth(action, credentials = {}) {
+  if (!HA.CloudAuth) return;
+  const task = action === 'check' ? HA.CloudAuth.checkSession()
+    : action === 'sign-in' ? HA.CloudAuth.signIn(credentials.email, credentials.password)
+      : HA.CloudAuth.signOut();
+  if (view === 'settings' && settingsSub === 'Data & Sync') render();
+  await task;
+  if (view === 'settings' && settingsSub === 'Data & Sync') render();
+}
+function cloudStateUnchanged() {
+  if (!cloudReview || !cloudReview.localSnapshot) return false;
+  try { return JSON.stringify(HA.StandardSync.createSnapshot(S)) === JSON.stringify(cloudReview.localSnapshot); }
+  catch (_) { return false; }
+}
+async function reviewCloudCopies() {
+  cloudReview = null; cloudReviewMessage = 'Checking account and comparing copies…'; cloudCloudCopyExported = false; cloudLocalCopyExported = false; render();
+  try {
+    const auth = await HA.CloudAuth.checkSession();
+    if (auth.status !== 'signed-in') throw new Error(auth.message || 'Sign in is required to compare cloud progress.');
+    cloudReview = await HA.StandardSync.review(S);
+    cloudReviewMessage = 'Comparison complete. No copy has been changed.';
+  } catch (_) { cloudReview = null; cloudReviewMessage = 'Could not compare copies. Local progress was not changed; check your connection and account.'; }
+  if (view === 'settings' && settingsSub === 'Data & Sync') render();
+}
+function exportCloudCopy() {
+  if (!cloudReview || !cloudReview.cloudSnapshot) return;
+  try {
+    HA.Card.download(new Blob([Store.exportJSON(cloudReview.cloudSnapshot.state)], { type: 'application/json' }), `hunterarsenal-cloud-revision-${cloudReview.cloudRevision}.json`);
+    cloudCloudCopyExported = true; cloudReviewMessage = 'Cloud copy downloaded. You may now explicitly choose to replace it.'; render();
+  } catch (_) { cloudReviewMessage = 'Cloud copy export failed; replacement remains unavailable.'; render(); }
+}
+function exportLocalCopyForRestore() {
+  if (!cloudReview || !cloudReview.cloudSnapshot) return;
+  try {
+    HA.Card.download(new Blob([Store.exportJSON(S)], { type: 'application/json' }), `hunterarsenal-local-before-restore-${today()}.json`);
+    cloudLocalCopyExported = true; cloudReviewMessage = 'Local backup downloaded. You may now explicitly choose to restore the reviewed cloud copy.'; render();
+  } catch (_) { cloudReviewMessage = 'Local backup export failed; restore remains unavailable.'; render(); }
+}
+function askCloudUpload() {
+  if (!cloudReview || !['local-only', 'different'].includes(cloudReview.status)) return;
+  if (!cloudStateUnchanged()) { cloudReviewMessage = 'Local progress changed after comparison. Compare again before transferring.'; cloudReview = null; render(); return; }
+  if (cloudReview.status === 'different' && !cloudCloudCopyExported) return;
+  const comparison = cloudReview;
+  Notice.show({ title: comparison.status === 'local-only' ? 'UPLOAD LOCAL SNAPSHOT?' : 'REPLACE CLOUD SNAPSHOT?', dismissible: true,
+    bodyHTML: `<p>This sends the validated local HunterArsenal snapshot to your signed-in account. Standard cloud snapshots are readable by privileged database operators and are not end-to-end encrypted.</p>${comparison.status === 'different' ? `<p>Cloud revision ${comparison.cloudRevision} was exported. Proceed only if you have confirmed the backup file was saved. A newer revision will block this write.</p>` : '<p>No cloud snapshot currently exists. Your local copy remains on this device.</p>'}`,
+    secondary: { label: 'CANCEL' }, primary: { label: comparison.confirmation, onClick: async () => {
+      if (!cloudStateUnchanged()) { cloudReviewMessage = 'Local progress changed after comparison. No upload was made; compare again.'; cloudReview = null; render(); return; }
+      try {
+        const result = await HA.StandardSync.confirmUpload(comparison.handle, comparison.confirmation);
+        cloudReviewMessage = result.status === 'uploaded' ? `Upload complete at cloud revision ${result.revision}. Your local copy remains unchanged.` : result.status === 'same' ? 'Copies already match; no upload was needed.' : 'Cloud revision changed. No overwrite occurred; compare again.';
+        cloudReview = null;
+      } catch (_) { cloudReviewMessage = 'Upload failed. Local progress was not changed; compare again before retrying.'; cloudReview = null; }
+      if (view === 'settings' && settingsSub === 'Data & Sync') render();
+    } }
+  });
+}
+function askCloudRestore() {
+  if (!cloudReview || !cloudReview.cloudSnapshot || !cloudLocalCopyExported) return;
+  if (!cloudStateUnchanged()) { cloudReviewMessage = 'Local progress changed after comparison. Compare again before restoring.'; cloudReview = null; render(); return; }
+  const comparison = cloudReview;
+  Notice.show({ title: 'RESTORE CLOUD SNAPSHOT?', dismissible: true,
+    bodyHTML: `<p>This replaces the current local snapshot with the fully validated cloud revision ${comparison.cloudRevision}. Proceed only if you have confirmed your local backup file was saved. If the cloud revision changed after comparison, restore will stop.</p><p>Standard cloud snapshots are not end-to-end encrypted.</p>`,
+    secondary: { label: 'CANCEL' }, primary: { label: 'RESTORE REVISION ' + comparison.cloudRevision, onClick: async () => {
+      if (!cloudStateUnchanged()) { cloudReviewMessage = 'Local progress changed after comparison. No restore was made; compare again.'; cloudReview = null; render(); return; }
+      try {
+        const result = await HA.StandardSync.confirmRestoreCandidate(comparison.handle, 'RESTORE CLOUD SNAPSHOT TO THIS DEVICE');
+        if (result.status === 'conflict') { cloudReviewMessage = 'Cloud revision changed. No local data was changed; compare again.'; }
+        else {
+          if (!cloudStateUnchanged()) { cloudReviewMessage = 'Local progress changed during comparison. No restore was made; compare again.'; }
+          else {
+            const restored = Store.restore(result.state);
+            if (!restored.ok) { cloudReviewMessage = 'Local restore could not be verified. HunterArsenal recovery protections are active; follow the recovery screen.'; }
+            else {
+              S = restored.state; lastSavedState = JSON.parse(JSON.stringify(restored.state)); applyTheme();
+              cloudReviewMessage = `Cloud revision ${result.revision} restored. Your prior local snapshot is available in the downloaded backup.`;
+            }
+          }
+        }
+      } catch (_) { cloudReviewMessage = 'Restore failed validation or could not reach Supabase. Local progress was not intentionally changed.'; }
+      cloudReview = null;
+      if (view === 'settings' && settingsSub === 'Data & Sync') render();
+    } }
+  });
+}
+if (HA.CloudAuth) HA.CloudAuth.subscribe(() => {
+  if (HA.CloudAuth.state().status !== 'signed-in') { cloudReview = null; cloudReviewMessage = ''; cloudCloudCopyExported = false; cloudLocalCopyExported = false; }
+  if (view === 'settings' && settingsSub === 'Data & Sync') render();
+});
+
+document.addEventListener('submit', (e) => {
+  const form = e.target.closest('[data-cloud-auth]');
+  if (!form) return;
+  e.preventDefault();
+  const credentials = { email: form.elements.email.value, password: form.elements.password.value };
+  form.reset();
+  const task = runCloudAuth('sign-in', credentials);
+  credentials.password = '';
+  task.catch(() => {});
+});
 
 let lastKey = '', lastTab = '';
 function render() {
@@ -1209,6 +1337,13 @@ document.addEventListener('click', (e) => {
     case 'nav': view = d.v; menuHabit = null; menuSkill = null; if (view !== 'profile') profileSub = null; if (view === 'home') bonusSub = null; closeSheet(); render(); $('#scroll').scrollTop = 0; break;
     case 'settings-open': settingsSub = d.v; render(); $('#scroll').scrollTop = 0; break;
     case 'settings-back': settingsSub = null; render(); break;
+    case 'cloud-status': runCloudAuth('check').catch(() => {}); break;
+    case 'cloud-sign-out': runCloudAuth('sign-out').catch(() => {}); break;
+    case 'cloud-sync-review': if (HA.StandardSync && HA.CloudAuth && !Store.isRecoveryRequired()) reviewCloudCopies(); break;
+    case 'cloud-export-copy': exportCloudCopy(); break;
+    case 'cloud-export-local': exportLocalCopyForRestore(); break;
+    case 'cloud-sync-upload': askCloudUpload(); break;
+    case 'cloud-sync-restore': askCloudRestore(); break;
     case 'shop-open': view='home'; homeTab='bonus'; bonusSub='themes'; render(); break;
     case 'class-overview': classOverviewModal(); break;
     case 'rules': view = 'rules'; render(); $('#scroll').scrollTop = 0; break;
